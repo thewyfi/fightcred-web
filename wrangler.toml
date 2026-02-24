@@ -1,10 +1,10 @@
 name = "fightcred-web"
 type = "javascript"
-main = ".vercel/output/static/_worker.js/index.js"
 compatibility_date = "2024-12-16"
 compatibility_flags = ["nodejs_compat"]
 
 [env.production]
+name = "fightcred-web-prod"
 routes = [
   { pattern = "fightcred-web.pages.dev", zone_name = "pages.dev" }
 ]
