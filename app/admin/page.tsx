@@ -1,6 +1,7 @@
 "use client"
+export const runtime = 'edge';
+export const dynamic = "force-dynamic";
 
-export const dynamic = "force-dynamic";;
 
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";

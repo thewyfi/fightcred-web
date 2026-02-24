@@ -1,6 +1,7 @@
 "use client"
+export const runtime = 'edge';
+export const dynamic = "force-dynamic";
 
-export const dynamic = "force-dynamic";;
 
 import { trpc } from "@/lib/trpc";
 import Link from "next/link";
