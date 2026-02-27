@@ -18,9 +18,18 @@ export default function LoginPage() {
   }, [user, router]);
 
   const handleLogin = () => {
-    const apiBase = getApiBaseUrl();
-    // Redirect to the backend OAuth flow
-    window.location.href = `${apiBase}/api/oauth/login?redirectTo=${encodeURIComponent(window.location.origin)}`;
+    // Build the OAuth login URL pointing directly to Manus portal
+    // The callback goes to our web app's /oauth/callback page
+    const oauthPortalUrl = process.env.NEXT_PUBLIC_OAUTH_PORTAL_URL ?? "https://manus.im";
+    const appId = process.env.NEXT_PUBLIC_APP_ID ?? "Zz4DsVJKuVCXA9LgUEMAxu";
+    const callbackUrl = `${window.location.origin}/oauth/callback`;
+    const state = btoa(callbackUrl);
+    const loginUrl = new URL(`${oauthPortalUrl}/app-auth`);
+    loginUrl.searchParams.set("appId", appId);
+    loginUrl.searchParams.set("redirectUri", callbackUrl);
+    loginUrl.searchParams.set("state", state);
+    loginUrl.searchParams.set("type", "signIn");
+    window.location.href = loginUrl.toString();
   };
 
   const handleDevLogin = async () => {
