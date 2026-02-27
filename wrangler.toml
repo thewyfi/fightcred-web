@@ -1,10 +1,4 @@
 name = "fightcred-web"
-type = "javascript"
-compatibility_date = "2024-12-16"
+pages_build_output_dir = ".vercel/output/static"
+compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
-
-[env.production]
-name = "fightcred-web-prod"
-routes = [
-  { pattern = "fightcred-web.pages.dev", zone_name = "pages.dev" }
-]
