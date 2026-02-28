@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { trpc } from "@/lib/trpc";
+import { trpc, clearSessionToken } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Trophy, Swords, User, LayoutList, LogOut } from "lucide-react";
 
@@ -18,7 +18,15 @@ export function Navbar() {
   const { data: user } = trpc.auth.me.useQuery();
   const { data: profile } = trpc.profile.get.useQuery(undefined, { enabled: !!user });
   const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: () => { window.location.href = "/login"; },
+    onSuccess: () => {
+      clearSessionToken(); // clear localStorage token (cross-origin auth workaround)
+      window.location.href = "/login";
+    },
+    onError: () => {
+      // Even if server call fails, clear local token and redirect
+      clearSessionToken();
+      window.location.href = "/login";
+    },
   });
 
   return (
