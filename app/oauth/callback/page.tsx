@@ -60,11 +60,32 @@ export default function OAuthCallbackPage() {
         // Store session token in cookie for cross-request auth
         setCookie(SESSION_COOKIE_NAME, sessionToken, 365);
 
-        // Redirect to home page
+        // Check if the user has a profile — new users need to set one up
+        try {
+          const profileRes = await fetch(`${apiBase}/api/trpc/profile.get?batch=1&input=%7B%220%22%3A%7B%22json%22%3Anull%7D%7D`, {
+            credentials: "include",
+            headers: { Authorization: `Bearer ${sessionToken}` },
+          });
+          if (profileRes.ok) {
+            const profileData = await profileRes.json();
+            // tRPC batch response is an array
+            const result = Array.isArray(profileData) ? profileData[0] : profileData;
+            const hasProfile = result?.result?.data?.json?.username != null;
+            if (!hasProfile) {
+              router.replace("/profile/setup");
+              return;
+            }
+          }
+        } catch {
+          // If profile check fails, still redirect to home
+        }
+
+        // Existing user — go to home
         router.replace("/");
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Authentication failed. Please try again.";
         console.error("[OAuth Callback] Failed:", err);
-        setErrorMsg(err.message || "Authentication failed. Please try again.");
+        setErrorMsg(message);
         setStatus("error");
       }
     };
