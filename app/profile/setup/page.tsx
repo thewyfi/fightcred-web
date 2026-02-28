@@ -3,13 +3,34 @@ export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { trpc } from "@/lib/trpc";
+import { useRouter, useSearchParams } from "next/navigation";
+import { trpc, saveSessionToken } from "@/lib/trpc";
 import { Loader2 } from "lucide-react";
 
 export default function ProfileSetupPage() {
   const router = useRouter();
-  const { data: user, isLoading: authLoading } = trpc.auth.me.useQuery();
+  const searchParams = useSearchParams();
+  const [tokenReady, setTokenReady] = useState(false);
+
+  // On mount: if a token was passed in the URL (from OAuth redirect), save it to localStorage
+  // so the tRPC client can send it as an Authorization Bearer header (cross-origin cookie workaround)
+  useEffect(() => {
+    const token = searchParams.get("token");
+    if (token) {
+      saveSessionToken(token);
+      // Remove token from URL to keep it clean
+      const url = new URL(window.location.href);
+      url.searchParams.delete("token");
+      window.history.replaceState({}, "", url.toString());
+    }
+    setTokenReady(true);
+  }, [searchParams]);
+
+  const { data: user, isLoading: authLoading } = trpc.auth.me.useQuery(
+    undefined,
+    { enabled: tokenReady }, // wait until token is saved before querying
+  );
+
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
@@ -22,12 +43,12 @@ export default function ProfileSetupPage() {
   });
 
   useEffect(() => {
-    if (!authLoading && !user) {
+    if (tokenReady && !authLoading && !user) {
       router.replace("/login");
     }
-  }, [user, authLoading, router]);
+  }, [user, authLoading, router, tokenReady]);
 
-  if (authLoading || !user) {
+  if (!tokenReady || authLoading || !user) {
     return (
       <div className="flex items-center justify-center py-24 text-[#9A9A9A]">
         <Loader2 size={24} className="animate-spin mr-2" />

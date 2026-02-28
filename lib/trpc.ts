@@ -11,6 +11,28 @@ import type { AnyRouter } from "@trpc/server";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const trpc: any = createTRPCReact<AnyRouter>();
 
+const SESSION_TOKEN_KEY = "fightcred_session_token";
+
+/** Store the session token in localStorage (used when cookie can't cross origins) */
+export function saveSessionToken(token: string) {
+  if (typeof window !== "undefined") {
+    localStorage.setItem(SESSION_TOKEN_KEY, token);
+  }
+}
+
+/** Retrieve the stored session token */
+export function getSessionToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(SESSION_TOKEN_KEY);
+}
+
+/** Clear the stored session token (on logout) */
+export function clearSessionToken() {
+  if (typeof window !== "undefined") {
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+  }
+}
+
 export function getApiBaseUrl(): string {
   // Server-side: use env var or default
   if (typeof window === "undefined") {
@@ -36,7 +58,12 @@ export function createTRPCClientConfig() {
         url: `${getApiBaseUrl()}/api/trpc`,
         transformer: superjson,
         fetch(url, options) {
-          return fetch(url, { ...options, credentials: "include" });
+          const token = getSessionToken();
+          const headers = new Headers((options?.headers as HeadersInit) ?? {});
+          if (token) {
+            headers.set("Authorization", `Bearer ${token}`);
+          }
+          return fetch(url, { ...options, headers, credentials: "include" });
         },
       }),
     ],
