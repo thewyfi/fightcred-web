@@ -82,12 +82,20 @@ export function Navbar() {
                 </button>
               </div>
             ) : (
-              <Link
-                href="/login"
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#D20A0A] hover:bg-[#b00808] text-white text-sm font-semibold transition-colors"
-              >
-                Sign In
-              </Link>
+              <div className="flex items-center gap-2">
+                <Link
+                  href="/login"
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#444] text-[#9A9A9A] hover:text-white hover:border-[#666] text-sm font-medium transition-colors"
+                >
+                  Sign In
+                </Link>
+                <Link
+                  href="/signup"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#D20A0A] hover:bg-[#b00808] text-white text-sm font-semibold transition-colors"
+                >
+                  Create Account
+                </Link>
+              </div>
             )}
           </div>
         </div>
