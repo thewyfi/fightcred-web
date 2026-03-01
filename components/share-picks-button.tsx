@@ -1,6 +1,7 @@
 "use client";
 import { useState, useCallback } from "react";
-import { Share2, Download, Loader2, ImageIcon } from "lucide-react";
+import { Share2, Download, Loader2 } from "lucide-react";
+import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
 type Fight = {
@@ -9,11 +10,17 @@ type Fight = {
   fighter2Name: string;
   fighter1Record?: string | null;
   fighter2Record?: string | null;
+  weightClass?: string | null;
   cardSection: string;
   isMainEvent: boolean;
   isTitleFight: boolean;
-  weightClass?: string | null;
   status: string;
+  odds1?: number | null;
+  odds2?: number | null;
+  winner?: string | null;
+  method?: string | null;
+  finishType?: string | null;
+  round?: number | null;
 };
 
 type Prediction = {
@@ -36,10 +43,7 @@ interface Props {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function rrect(
-  ctx: CanvasRenderingContext2D,
-  x: number, y: number, w: number, h: number, r: number,
-) {
+function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.lineTo(x + w - r, y);
@@ -69,18 +73,19 @@ function drawRight(ctx: CanvasRenderingContext2D, text: string, rx: number, y: n
   ctx.fillText(text, rx - tw(ctx, text), y);
 }
 
-function methodShort(method?: string | null): string {
-  if (method === "tko_ko")      return "TKO/KO";
-  if (method === "submission")  return "SUB";
-  if (method === "decision")    return "DEC";
-  return method?.toUpperCase() ?? "DEC";
+function methodLabel(method?: string | null, finishType?: string | null): string {
+  if (!method || finishType === "decision") return "DECISION";
+  if (method === "tko_ko")     return "TKO/KO";
+  if (method === "submission") return "SUB";
+  if (method === "decision")   return "DECISION";
+  if (method === "draw")       return "DRAW";
+  if (method === "nc")         return "NC";
+  return method.toUpperCase();
 }
 
-function methodDetail(method?: string | null, finishType?: string | null): string {
-  if (finishType === "decision" || method == null) return "DECISION";
-  if (method === "tko_ko")     return "TKO / KO";
-  if (method === "submission") return "SUBMISSION";
-  return "FINISH";
+function formatOddsStr(odds: number | null | undefined): string {
+  if (odds == null) return "";
+  return odds > 0 ? `+${odds}` : `${odds}`;
 }
 
 function lastName(name: string): string {
@@ -103,8 +108,8 @@ async function generateShareImage(
   const W       = 1080;
   const PAD     = 36;
   const HERO_H  = 420;
-  const ROW_H   = 76;
-  const ROW_GAP = 7;
+  const ROW_H   = 88;   // taller rows to fit odds + dual badges
+  const ROW_GAP = 6;
   const SEC_H   = 52;
   const FOOT_H  = 90;
   const H       = HERO_H + SEC_H + (ROW_H + ROW_GAP) * fights.length + FOOT_H + 16;
@@ -112,6 +117,7 @@ async function generateShareImage(
   const GOLD     = "#C9A84C";
   const GOLD_DIM = "#786428";
   const RED      = "#D20A0A";
+  const GREEN    = "#22C55E";
   const WHITE    = "#FFFFFF";
   const GREY     = "#464646";
   const MUTED    = "#6E6E6E";
@@ -123,7 +129,7 @@ async function generateShareImage(
   canvas.height = H;
   const ctx = canvas.getContext("2d")!;
 
-  // ── Full background ──────────────────────────────────────────────────────────
+  // ── Background ───────────────────────────────────────────────────────────────
   ctx.fillStyle = "#080808";
   ctx.fillRect(0, 0, W, H);
 
@@ -134,7 +140,7 @@ async function generateShareImage(
     ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + H, H); ctx.stroke();
   }
 
-  // ── HERO gradient background ─────────────────────────────────────────────────
+  // ── HERO gradient ────────────────────────────────────────────────────────────
   const heroBg = ctx.createLinearGradient(0, 0, W, HERO_H);
   heroBg.addColorStop(0, "#160000");
   heroBg.addColorStop(0.5, "#0A0A0A");
@@ -142,11 +148,9 @@ async function generateShareImage(
   ctx.fillStyle = heroBg;
   ctx.fillRect(0, 0, W, HERO_H);
 
-  // Red top bar
+  // Red top bar + gold side bars
   ctx.fillStyle = RED;
   ctx.fillRect(0, 0, W, 8);
-
-  // Gold side bars
   ctx.fillStyle = GOLD;
   ctx.fillRect(0, 8, 4, HERO_H);
   ctx.fillRect(W - 4, 8, 4, HERO_H);
@@ -157,7 +161,6 @@ async function generateShareImage(
   ctx.textBaseline = "top";
   ctx.fillText("FIGHTCRED", PAD + 8, 20);
 
-  // Event name (shortened)
   const shortEvent = eventName
     .replace("UFC Fight Night: ", "UFC FN: ")
     .replace(/^UFC /, "UFC ");
@@ -174,12 +177,11 @@ async function generateShareImage(
     drawCentered(ctx, ds, W / 2, 58);
   } catch { drawCentered(ctx, eventDate, W / 2, 58); }
 
-  // ── Center divider ───────────────────────────────────────────────────────────
+  // ── Center divider + VS badge ─────────────────────────────────────────────────
   ctx.strokeStyle = "rgba(120,0,0,0.7)";
   ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(W / 2, 90); ctx.lineTo(W / 2, HERO_H - 90); ctx.stroke();
 
-  // ── VS badge ─────────────────────────────────────────────────────────────────
   const vsSz = 70;
   const vx = W / 2 - vsSz / 2;
   const vy = HERO_H / 2 - vsSz / 2 - 10;
@@ -192,11 +194,12 @@ async function generateShareImage(
   ctx.textBaseline = "top";
 
   // ── Main event fighters ───────────────────────────────────────────────────────
-  // Use fightsWithPreds as source of truth for hero section too
-  const allFightsForHero = fightsWithPreds.length > 0 ? fightsWithPreds : fights.map(f => ({ ...f, userPrediction: null }));
+  const allFightsForHero = fightsWithPreds.length > 0
+    ? fightsWithPreds
+    : fights.map(f => ({ ...f, userPrediction: null }));
   const mainFightWithPred = allFightsForHero.find(f => f.isMainEvent) ?? allFightsForHero[0];
-  const mainFight = mainFightWithPred;
-  const mainPred  = (mainFightWithPred as FightWithPred)?.userPrediction ?? null;
+  const mainFight = mainFightWithPred as FightWithPred;
+  const mainPred  = mainFight?.userPrediction ?? null;
 
   const f1n = mainFight?.fighter1Name ?? "";
   const f2n = mainFight?.fighter2Name ?? "";
@@ -207,9 +210,8 @@ async function generateShareImage(
   const f1Col = f1Picked ? GOLD : hasPick ? GREY : WHITE;
   const f2Col = f2Picked ? GOLD : hasPick ? GREY : WHITE;
 
-  const nameY = HERO_H - 130;
+  const nameY = HERO_H - 140;
 
-  // Last names — large
   setFont(ctx, 90, true);
   ctx.fillStyle = f1Col;
   ctx.textBaseline = "top";
@@ -218,23 +220,35 @@ async function generateShareImage(
   ctx.fillStyle = f2Col;
   drawRight(ctx, lastName(f2n), W - PAD - 8, nameY);
 
-  // First names
   setFont(ctx, 24, true);
   ctx.fillStyle = f1Picked ? GOLD : MUTED;
   ctx.fillText(firstName(f1n), PAD + 8, nameY + 98);
   ctx.fillStyle = f2Picked ? GOLD : MUTED;
   drawRight(ctx, firstName(f2n), W - PAD - 8, nameY + 98);
 
-  // Records
   setFont(ctx, 20, false);
   ctx.fillStyle = GREY;
   ctx.fillText(mainFight?.fighter1Record ?? "", PAD + 8, nameY + 128);
   drawRight(ctx, mainFight?.fighter2Record ?? "", W - PAD - 8, nameY + 128);
 
-  // Pick label + detail
-  const pickY = nameY + 158;
+  // Odds in hero
+  const o1 = formatOddsStr(mainFight?.odds1);
+  const o2 = formatOddsStr(mainFight?.odds2);
+  if (o1) {
+    setFont(ctx, 18, true);
+    ctx.fillStyle = (mainFight?.odds1 ?? 0) < 0 ? GREEN : RED;
+    ctx.fillText(o1, PAD + 8, nameY + 155);
+  }
+  if (o2) {
+    setFont(ctx, 18, true);
+    ctx.fillStyle = (mainFight?.odds2 ?? 0) < 0 ? GREEN : RED;
+    drawRight(ctx, o2, W - PAD - 8, nameY + 155);
+  }
+
+  // Pick label
+  const pickY = nameY + 180;
   if (f1Picked && mainPred) {
-    const detail = methodDetail(mainPred.pickedMethod, mainPred.pickedFinishType);
+    const detail = methodLabel(mainPred.pickedMethod, mainPred.pickedFinishType);
     setFont(ctx, 16, true);
     ctx.fillStyle = GOLD;
     ctx.fillText("▶ MY PICK", PAD + 8, pickY);
@@ -242,7 +256,7 @@ async function generateShareImage(
     ctx.fillStyle = GOLD_DIM;
     ctx.fillText(detail, PAD + 8, pickY + 22);
   } else if (f2Picked && mainPred) {
-    const detail = methodDetail(mainPred.pickedMethod, mainPred.pickedFinishType);
+    const detail = methodLabel(mainPred.pickedMethod, mainPred.pickedFinishType);
     setFont(ctx, 16, true);
     ctx.fillStyle = GOLD;
     drawRight(ctx, "MY PICK ◀", W - PAD - 8, pickY);
@@ -251,12 +265,10 @@ async function generateShareImage(
     drawRight(ctx, detail, W - PAD - 8, pickY + 22);
   }
 
-  // Main event / weight class
   setFont(ctx, 16, true);
   ctx.fillStyle = RED;
   const meLabel = mainFight?.isTitleFight ? "◆ TITLE FIGHT ◆" : "◆ MAIN EVENT ◆";
   drawCentered(ctx, meLabel, W / 2, HERO_H - 52);
-
   setFont(ctx, 18, false);
   ctx.fillStyle = GREY;
   drawCentered(ctx, (mainFight?.weightClass ?? "").toUpperCase(), W / 2, HERO_H - 28);
@@ -293,13 +305,16 @@ async function generateShareImage(
   // ── Fight rows ───────────────────────────────────────────────────────────────
   let rowY = HERO_H + SEC_H;
 
-  // Use fightsWithPreds as single source of truth — it contains all fight data + predictions
-  const allFights = fightsWithPreds.length > 0 ? fightsWithPreds : fights.map(f => ({ ...f, userPrediction: null }));
+  const allFights = fightsWithPreds.length > 0
+    ? fightsWithPreds
+    : fights.map(f => ({ ...f, userPrediction: null }));
+
   for (const fight of allFights) {
-    const pred = (fight as FightWithPred).userPrediction ?? null;
-    const pF1  = pred?.pickedWinner === fight.fighter1Name;
-    const pF2  = pred?.pickedWinner === fight.fighter2Name;
-    const hp   = !!pred;
+    const pred    = (fight as FightWithPred).userPrediction ?? null;
+    const pF1     = pred?.pickedWinner === fight.fighter1Name;
+    const pF2     = pred?.pickedWinner === fight.fighter2Name;
+    const hp      = !!pred;
+    const resolved = fight.status === "completed" && !!fight.winner;
 
     // Row bg
     rrect(ctx, PAD, rowY, W - PAD * 2, ROW_H, 12);
@@ -314,94 +329,183 @@ async function generateShareImage(
     const iw  = W - PAD * 2 - 32;
     const mid = rowY + ROW_H / 2;
 
-    // Fighter 1
+    // ── Fighter 1 ──────────────────────────────────────────────────────────────
+    // Determine win/loss coloring for resolved fights
+    const f1Won = resolved && fight.winner === fight.fighter1Name;
+    const f2Won = resolved && fight.winner === fight.fighter2Name;
     const f1c = pF1 ? GOLD : hp ? GREY : "#D2D2D2";
-    setFont(ctx, 22, true);
+    const f2c = pF2 ? GOLD : hp ? GREY : "#D2D2D2";
+
+    const nameLineY = mid - 22;
+    const oddsLineY = mid + 2;
+    const recLineY  = mid + 20;
+
+    setFont(ctx, 20, true);
     ctx.fillStyle = f1c;
     ctx.textBaseline = "middle";
 
     let f1d = fight.fighter1Name;
-    while (tw(ctx, f1d) > iw * 0.40 && f1d.length > 4) f1d = f1d.slice(0, -1);
+    while (tw(ctx, f1d) > iw * 0.38 && f1d.length > 4) f1d = f1d.slice(0, -1);
     if (f1d !== fight.fighter1Name) f1d += "…";
-    ctx.fillText(f1d, ix, mid - 10);
+    ctx.fillText(f1d, ix, nameLineY);
 
-    setFont(ctx, 14, false);
-    ctx.fillStyle = "#373737";
-    ctx.fillText(fight.fighter1Record ?? "", ix, mid + 12);
-
-    // F1 marker
-    setFont(ctx, 22, true);
+    // F1 checkmark / X
+    setFont(ctx, 20, true);
     const f1dw = tw(ctx, f1d);
-    if (pF1) { ctx.fillStyle = GOLD; ctx.fillText("✓", ix + f1dw + 6, mid - 10); }
-    else if (hp) { ctx.fillStyle = RED; ctx.fillText("✗", ix + f1dw + 6, mid - 10); }
+    if (pF1) { ctx.fillStyle = GOLD; ctx.fillText("✓", ix + f1dw + 6, nameLineY); }
+    else if (hp) { ctx.fillStyle = RED; ctx.fillText("✗", ix + f1dw + 6, nameLineY); }
 
-    // Fighter 2
-    const f2c = pF2 ? GOLD : hp ? GREY : "#D2D2D2";
-    setFont(ctx, 22, true);
+    // F1 odds
+    const odds1Str = formatOddsStr(fight.odds1);
+    if (odds1Str) {
+      setFont(ctx, 14, true);
+      ctx.fillStyle = (fight.odds1 ?? 0) < 0 ? "#4ADE80" : "#F87171";
+      ctx.fillText(odds1Str, ix, oddsLineY);
+    }
+
+    // F1 record
+    setFont(ctx, 13, false);
+    ctx.fillStyle = "#373737";
+    ctx.fillText(fight.fighter1Record ?? "", ix, recLineY);
+
+    // ── Fighter 2 ──────────────────────────────────────────────────────────────
+    setFont(ctx, 20, true);
     ctx.fillStyle = f2c;
 
     let f2d = fight.fighter2Name;
-    while (tw(ctx, f2d) > iw * 0.40 && f2d.length > 4) f2d = f2d.slice(0, -1);
+    while (tw(ctx, f2d) > iw * 0.38 && f2d.length > 4) f2d = f2d.slice(0, -1);
     if (f2d !== fight.fighter2Name) f2d += "…";
     const f2dw = tw(ctx, f2d);
-    ctx.fillText(f2d, ix + iw - f2dw, mid - 10);
+    ctx.fillText(f2d, ix + iw - f2dw, nameLineY);
 
-    setFont(ctx, 14, false);
+    // F2 checkmark / X
+    setFont(ctx, 20, true);
+    if (pF2) { ctx.fillStyle = GOLD; ctx.fillText("✓", ix + iw - f2dw - tw(ctx, "✓") - 6, nameLineY); }
+    else if (hp) { ctx.fillStyle = RED; ctx.fillText("✗", ix + iw - f2dw - tw(ctx, "✗") - 6, nameLineY); }
+
+    // F2 odds
+    const odds2Str = formatOddsStr(fight.odds2);
+    if (odds2Str) {
+      setFont(ctx, 14, true);
+      ctx.fillStyle = (fight.odds2 ?? 0) < 0 ? "#4ADE80" : "#F87171";
+      const oddsW = tw(ctx, odds2Str);
+      ctx.fillText(odds2Str, ix + iw - oddsW, oddsLineY);
+    }
+
+    // F2 record
+    setFont(ctx, 13, false);
     ctx.fillStyle = "#373737";
     const recW = tw(ctx, fight.fighter2Record ?? "");
-    ctx.fillText(fight.fighter2Record ?? "", ix + iw - recW, mid + 12);
+    ctx.fillText(fight.fighter2Record ?? "", ix + iw - recW, recLineY);
 
-    // F2 marker
-    setFont(ctx, 22, true);
-    if (pF2) { ctx.fillStyle = GOLD; ctx.fillText("✓", ix + iw - f2dw - tw(ctx, "✓") - 6, mid - 10); }
-    else if (hp) { ctx.fillStyle = RED; ctx.fillText("✗", ix + iw - f2dw - tw(ctx, "✗") - 6, mid - 10); }
-
-    // Center: method badge + round badge
+    // ── Center badges ──────────────────────────────────────────────────────────
     const cx = W / 2;
+
     if (hp && pred) {
-      // Build label: method + finish type
-      const isDecision = pred.pickedFinishType === "decision" || !pred.pickedMethod;
-      const mShort = isDecision ? "DECISION" : methodShort(pred.pickedMethod);
-      const finishLabel = isDecision ? "" : pred.pickedFinishType === "finish" ? "FINISH" : "";
-      const badgeCol = pred.status === "correct" ? "#22C55E"
-                     : pred.status === "wrong"   ? "#EF4444"
+      const predMethodLabel = methodLabel(pred.pickedMethod, pred.pickedFinishType);
+      const badgeCol = pred.status === "correct" ? GREEN
+                     : pred.status === "wrong"   ? RED
                      : GOLD;
 
-      // Method badge (top)
-      setFont(ctx, 13, true);
-      const bw = tw(ctx, mShort) + 20;
-      const bh = 24;
-      const bx = cx - bw / 2;
-      const by = mid - 22;
-      rrect(ctx, bx, by, bw, bh, 6);
-      ctx.fillStyle = "#141414"; ctx.fill();
-      rrect(ctx, bx, by, bw, bh, 6);
-      ctx.strokeStyle = badgeCol; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = badgeCol;
-      ctx.textBaseline = "middle";
-      drawCentered(ctx, mShort, cx, by + bh / 2);
+      if (resolved && fight.method) {
+        // ── Resolved: show PREDICTED vs RESULT side by side ──────────────────
+        const actualLabel = methodLabel(fight.method, fight.finishType);
 
-      // Finish type badge (bottom, only for non-decision)
-      if (!isDecision) {
-        const ftText = "INSIDE DIST";
-        setFont(ctx, 12, false);
-        const rw = tw(ctx, ftText) + 16;
-        const rh = 20;
-        const rx = cx - rw / 2;
-        const ry = mid + 4;
-        rrect(ctx, rx, ry, rw, rh, 5);
+        // "PRED" label + badge on left of center
+        const predText = predMethodLabel;
+        const actText  = actualLabel;
+
+        setFont(ctx, 11, true);
+        const halfW = iw * 0.18;
+        const bh = 22;
+
+        // Predicted badge (left of center)
+        const pbw = Math.max(tw(ctx, predText) + 16, 70);
+        const pbx = cx - pbw - 6;
+        const pby = mid - 24;
+        rrect(ctx, pbx, pby, pbw, bh, 5);
         ctx.fillStyle = "#141414"; ctx.fill();
-        rrect(ctx, rx, ry, rw, rh, 5);
-        ctx.strokeStyle = "#3C3C3C"; ctx.lineWidth = 1; ctx.stroke();
-        ctx.fillStyle = "#787878";
-        drawCentered(ctx, ftText, cx, ry + rh / 2);
-      } else {
-        setFont(ctx, 13, false);
-        ctx.fillStyle = "#2D2D2D";
+        rrect(ctx, pbx, pby, pbw, bh, 5);
+        ctx.strokeStyle = badgeCol; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = badgeCol;
         ctx.textBaseline = "middle";
-        drawCentered(ctx, "VS", cx, mid);
+        drawCentered(ctx, predText, pbx + pbw / 2, pby + bh / 2);
+
+        // "PRED" micro label above
+        setFont(ctx, 10, false);
+        ctx.fillStyle = "#555555";
+        ctx.textBaseline = "middle";
+        drawCentered(ctx, "PRED", pbx + pbw / 2, pby - 8);
+
+        // Actual result badge (right of center)
+        setFont(ctx, 11, true);
+        const abw = Math.max(tw(ctx, actText) + 16, 70);
+        const abx = cx + 6;
+        const aby = mid - 24;
+        rrect(ctx, abx, aby, abw, bh, 5);
+        ctx.fillStyle = "#141414"; ctx.fill();
+        rrect(ctx, abx, aby, abw, bh, 5);
+        ctx.strokeStyle = "#555555"; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = "#AAAAAA";
+        ctx.textBaseline = "middle";
+        drawCentered(ctx, actText, abx + abw / 2, aby + bh / 2);
+
+        // "RESULT" micro label above
+        setFont(ctx, 10, false);
+        ctx.fillStyle = "#555555";
+        drawCentered(ctx, "RESULT", abx + abw / 2, aby - 8);
+
+        // Winner label below badges
+        if (fight.winner) {
+          const winnerShort = fight.winner.split(" ").pop()!.toUpperCase();
+          setFont(ctx, 11, true);
+          ctx.fillStyle = f1Won ? "#4ADE80" : f2Won ? "#4ADE80" : "#555555";
+          ctx.textBaseline = "middle";
+          drawCentered(ctx, `W: ${winnerShort}`, cx, mid + 8);
+        }
+
+      } else {
+        // ── Pending: show single method badge ────────────────────────────────
+        const isDecision = pred.pickedFinishType === "decision" || !pred.pickedMethod;
+        const mShort = predMethodLabel;
+
+        setFont(ctx, 13, true);
+        const bw = tw(ctx, mShort) + 20;
+        const bh = 24;
+        const bx = cx - bw / 2;
+        const by = mid - 22;
+        rrect(ctx, bx, by, bw, bh, 6);
+        ctx.fillStyle = "#141414"; ctx.fill();
+        rrect(ctx, bx, by, bw, bh, 6);
+        ctx.strokeStyle = badgeCol; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = badgeCol;
+        ctx.textBaseline = "middle";
+        drawCentered(ctx, mShort, cx, by + bh / 2);
+
+        // Finish type sub-badge
+        if (!isDecision) {
+          setFont(ctx, 12, false);
+          const ftText = "INSIDE DIST";
+          const rw = tw(ctx, ftText) + 16;
+          const rh = 20;
+          const rx = cx - rw / 2;
+          const ry = mid + 4;
+          rrect(ctx, rx, ry, rw, rh, 5);
+          ctx.fillStyle = "#141414"; ctx.fill();
+          rrect(ctx, rx, ry, rw, rh, 5);
+          ctx.strokeStyle = "#3C3C3C"; ctx.lineWidth = 1; ctx.stroke();
+          ctx.fillStyle = "#787878";
+          ctx.textBaseline = "middle";
+          drawCentered(ctx, ftText, cx, ry + rh / 2);
+        } else {
+          setFont(ctx, 13, false);
+          ctx.fillStyle = "#2D2D2D";
+          ctx.textBaseline = "middle";
+          drawCentered(ctx, "VS", cx, mid + 8);
+        }
       }
     } else {
+      // No pick
       setFont(ctx, 13, false);
       ctx.fillStyle = "#2D2D2D";
       ctx.textBaseline = "middle";
@@ -420,23 +524,20 @@ async function generateShareImage(
   ctx.strokeStyle = "#1C1C1C"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(PAD, fy); ctx.lineTo(W - PAD, fy); ctx.stroke();
 
-  setFont(ctx, 28, true);
+  const picksCount = allFights.filter(f => (f as FightWithPred).userPrediction).length;
+
+  setFont(ctx, 22, true);
   ctx.fillStyle = GOLD;
   ctx.textBaseline = "top";
   ctx.fillText(`@${username}`, PAD, fy + 18);
 
-  const pickCount = fightsWithPreds.filter(f => f.userPrediction).length;
-  const pcText = `${pickCount}/${fights.length} picks made`;
   setFont(ctx, 18, false);
   ctx.fillStyle = MUTED;
-  drawCentered(ctx, pcText, W / 2, fy + 24);
+  drawCentered(ctx, `${picksCount}/${allFights.length} picks made`, W / 2, fy + 22);
 
-  ctx.fillStyle = "#2D2D2D";
-  drawRight(ctx, "fightcred.app", W - PAD, fy + 24);
-
-  // Gold bottom bar
-  ctx.fillStyle = GOLD;
-  ctx.fillRect(0, H - 7, W, 7);
+  setFont(ctx, 18, false);
+  ctx.fillStyle = GREY;
+  drawRight(ctx, "fightcred.app", W - PAD, fy + 22);
 
   return canvas.toDataURL("image/png");
 }
@@ -448,112 +549,99 @@ export function SharePicksButton({
   eventDate,
   fights,
   fightsWithPreds,
-  username,
+  username: usernameProp,
 }: Props) {
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [imageUrl, setImageUrl]         = useState<string | null>(null);
-  const [showPreview, setShowPreview]   = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
 
-  const handleGenerate = useCallback(async () => {
-    setIsGenerating(true);
+  // Get username from profile if not passed as prop
+  const { data: profile } = trpc.profile.get.useQuery(undefined, {
+    enabled: !usernameProp,
+  });
+  const username = usernameProp ?? profile?.username ?? "FightCred";
+
+  const generate = useCallback(async () => {
+    setLoading(true);
     try {
-      const preds = (fightsWithPreds ?? []) as FightWithPred[];
+      const preds = fightsWithPreds ?? [];
       const url = await generateShareImage(
-        eventName, eventDate, fights, preds, username ?? "FightCred",
+        eventName,
+        eventDate,
+        fights,
+        preds,
+        username,
       );
       setImageUrl(url);
-      setShowPreview(true);
     } catch (err) {
-      console.error("Failed to generate share image:", err);
-      alert("Failed to generate image. Please try again.");
+      console.error("Share card generation failed:", err);
     } finally {
-      setIsGenerating(false);
+      setLoading(false);
     }
   }, [eventName, eventDate, fights, fightsWithPreds, username]);
 
-  const handleDownload = useCallback(() => {
+  const download = useCallback(() => {
     if (!imageUrl) return;
     const a = document.createElement("a");
     a.href = imageUrl;
-    a.download = `fightcred_${eventName.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_picks.png`;
+    a.download = `fightcred_${eventName.replace(/\s+/g, "_").toLowerCase()}_picks.png`;
     a.click();
   }, [imageUrl, eventName]);
 
-  const handleShare = useCallback(async () => {
+  const share = useCallback(async () => {
     if (!imageUrl) return;
-    if (typeof navigator.share === "function") {
-      try {
-        const blob = await (await fetch(imageUrl)).blob();
-        const file = new File([blob], "fightcred_picks.png", { type: "image/png" });
-        await navigator.share({ title: `My FightCred Picks — ${eventName}`, files: [file] });
+    try {
+      const res = await fetch(imageUrl);
+      const blob = await res.blob();
+      const file = new File([blob], "fightcred_picks.png", { type: "image/png" });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: "My FightCred Picks" });
         return;
-      } catch { /* fall through */ }
-    }
-    handleDownload();
-  }, [imageUrl, eventName, handleDownload]);
+      }
+    } catch { /* fall through */ }
+    download();
+  }, [imageUrl, download]);
+
+  if (imageUrl) {
+    return (
+      <div className="flex flex-col items-center gap-3 w-full max-w-sm">
+        <img src={imageUrl} alt="Your picks" className="w-full rounded-xl border border-white/10 shadow-xl" />
+        <div className="flex gap-2 w-full">
+          <button
+            onClick={share}
+            className="flex-1 flex items-center justify-center gap-2 bg-[#C9A84C] hover:bg-[#b8963e] text-black font-bold py-2.5 px-4 rounded-lg text-sm transition-colors"
+          >
+            <Share2 size={16} /> Share
+          </button>
+          <button
+            onClick={download}
+            className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white font-semibold py-2.5 px-4 rounded-lg text-sm transition-colors"
+          >
+            <Download size={16} /> Save
+          </button>
+          <button
+            onClick={() => setImageUrl(null)}
+            className="flex items-center justify-center bg-white/5 hover:bg-white/10 text-white/60 py-2.5 px-3 rounded-lg text-sm transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <>
-      <button
-        onClick={handleGenerate}
-        disabled={isGenerating}
-        className={cn(
-          "flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-sm transition-all",
-          "bg-[#C9A84C] hover:bg-[#b8973f] text-black",
-          "disabled:opacity-60 disabled:cursor-not-allowed",
-          "shadow-lg shadow-[#C9A84C]/20",
-        )}
-      >
-        {isGenerating ? (
-          <><Loader2 size={16} className="animate-spin" />Generating...</>
-        ) : (
-          <><ImageIcon size={16} />Share My Picks</>
-        )}
-      </button>
-
-      {showPreview && imageUrl && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4"
-          onClick={() => setShowPreview(false)}
-        >
-          <div
-            className="bg-[#1A1A1A] border border-[#333] rounded-2xl overflow-hidden max-w-sm w-full max-h-[90vh] flex flex-col"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between p-4 border-b border-[#333] flex-shrink-0">
-              <h3 className="font-bold text-white flex items-center gap-2">
-                <Share2 size={16} className="text-[#C9A84C]" />
-                Your Picks Card
-              </h3>
-              <button
-                onClick={() => setShowPreview(false)}
-                className="text-[#9A9A9A] hover:text-white transition-colors text-xl leading-none"
-              >×</button>
-            </div>
-
-            <div className="p-3 overflow-y-auto flex-1">
-              <img src={imageUrl} alt="Your picks card" className="w-full rounded-xl border border-[#333]" />
-            </div>
-
-            <div className="flex gap-3 p-3 flex-shrink-0 border-t border-[#222]">
-              <button
-                onClick={handleDownload}
-                className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-[#C9A84C] hover:bg-[#b8973f] text-black font-bold text-sm transition-colors"
-              >
-                <Download size={16} />Download
-              </button>
-              {typeof navigator !== "undefined" && typeof navigator.share === "function" && (
-                <button
-                  onClick={handleShare}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-[#D20A0A] hover:bg-[#b00808] text-white font-bold text-sm transition-colors"
-                >
-                  <Share2 size={16} />Share
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+    <button
+      onClick={generate}
+      disabled={loading}
+      className={cn(
+        "flex items-center gap-2 px-5 py-2.5 rounded-lg font-semibold text-sm transition-all",
+        "bg-[#C9A84C]/10 border border-[#C9A84C]/40 text-[#C9A84C]",
+        "hover:bg-[#C9A84C]/20 hover:border-[#C9A84C]/70",
+        loading && "opacity-60 cursor-not-allowed",
       )}
-    </>
+    >
+      {loading ? <Loader2 size={16} className="animate-spin" /> : <Share2 size={16} />}
+      {loading ? "Generating…" : "Share My Picks"}
+    </button>
   );
 }
