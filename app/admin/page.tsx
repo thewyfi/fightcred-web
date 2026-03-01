@@ -45,6 +45,11 @@ function AdminContent() {
     onError: (err: { message: string }) => setMessage({ type: "error", text: err.message }),
   });
 
+  const recalcMutation = trpc.admin.recalcAllScores.useMutation({
+    onSuccess: (data) => setMessage({ type: "success", text: `Recalculated scores for ${data.updated} users. Scores now on 0-100 scale.` }),
+    onError: (err: { message: string }) => setMessage({ type: "error", text: err.message }),
+  });
+
   if (!token) {
     return (
       <div className="text-center py-24 text-[#9A9A9A]">
@@ -103,6 +108,14 @@ function AdminContent() {
         >
           {lockMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : "🔒"}
           Lock Selected Fight
+        </button>
+        <button
+          onClick={() => recalcMutation.mutate({ token })}
+          disabled={recalcMutation.isPending}
+          className="py-3 px-4 bg-[#1A1A1A] border border-[#C9A84C]/40 hover:border-[#C9A84C] rounded-xl text-sm font-semibold text-[#C9A84C] transition-colors flex items-center justify-center gap-2 col-span-2"
+        >
+          {recalcMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : "📊"}
+          Recalculate All Credibility Scores (0-100)
         </button>
       </div>
 
