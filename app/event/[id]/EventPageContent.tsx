@@ -8,6 +8,7 @@ import { format } from "date-fns";
 import { MapPin, ArrowLeft, Loader2, Trophy } from "lucide-react";
 import { formatOdds, cn, getCardSectionLabel } from "@/lib/utils";
 import { PredictionModal } from "@/components/prediction-modal";
+import { SharePicksButton } from "@/components/share-picks-button";
 import { useState } from "react";
 
 type Fight = {
@@ -185,6 +186,7 @@ export default function EventPage({ params }: { params: Promise<{ id: string }> 
   const { data: fights, isLoading: fightsLoading } = trpc.fights.byEvent.useQuery({ eventId });
   const { data: fightsWithPreds } = trpc.fights.byEventWithPredictions.useQuery({ eventId });
   const { data: leaderboard } = trpc.leaderboard.byEvent.useQuery({ eventId, limit: 5 });
+  const { data: user } = trpc.auth.me.useQuery();
 
   const isLoading = eventLoading || fightsLoading;
 
@@ -255,6 +257,19 @@ export default function EventPage({ params }: { params: Promise<{ id: string }> 
           </div>
         </div>
       </div>
+
+      {/* Share My Picks — always visible when fights exist */}
+      {fights && fights.length > 0 && (
+        <div className="flex justify-center">
+          <SharePicksButton
+            eventName={event.name}
+            eventDate={event.eventDate instanceof Date ? event.eventDate.toISOString() : String(event.eventDate)}
+            fights={fights}
+            fightsWithPreds={fightsWithPreds}
+            username={(user as { username?: string } | null | undefined)?.username}
+          />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Fight card */}
