@@ -264,6 +264,7 @@ export default function EventPage({ params }: { params: Promise<{ id: string }> 
           <SharePicksButton
             eventName={event.name}
             eventDate={event.eventDate instanceof Date ? event.eventDate.toISOString() : String(event.eventDate)}
+            eventImageUrl={(event as { imageUrl?: string | null }).imageUrl}
             fights={fights}
             fightsWithPreds={fightsWithPreds}
             username={(user as { username?: string } | null | undefined)?.username}

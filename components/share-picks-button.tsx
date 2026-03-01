@@ -7,8 +7,8 @@ type Fight = {
   id: number;
   fighter1Name: string;
   fighter2Name: string;
-  fighter1Photo?: string | null;
-  fighter2Photo?: string | null;
+  fighter1ImageUrl?: string | null;
+  fighter2ImageUrl?: string | null;
   cardSection: string;
   isMainEvent: boolean;
   isTitleFight: boolean;
@@ -28,18 +28,34 @@ type FightWithPred = Fight & { userPrediction?: Prediction | null };
 interface Props {
   eventName: string;
   eventDate: string;
+  eventImageUrl?: string | null;
   fights: Fight[];
   fightsWithPreds?: FightWithPred[] | null;
   username?: string | null;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function proxyUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return `/api/img-proxy?url=${encodeURIComponent(url)}`;
+}
+
+async function loadImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+    // Timeout after 6s
+    setTimeout(() => resolve(null), 6000);
+  });
+}
+
 function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
+  x: number, y: number, w: number, h: number, r: number,
 ) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -54,253 +70,431 @@ function drawRoundedRect(
   ctx.closePath();
 }
 
+function truncate(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 0 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+  return t + "…";
+}
+
+// ─── Main generator ───────────────────────────────────────────────────────────
+
 async function generateShareImage(
   eventName: string,
   eventDate: string,
   fights: Fight[],
   fightsWithPreds: FightWithPred[],
   username: string,
+  eventImageUrl: string | null | undefined,
 ): Promise<string> {
-  const WIDTH = 1080;
-  const HEADER_H = 200;
-  const FIGHT_ROW_H = 72;
-  const FOOTER_H = 100;
-  const PADDING = 40;
-  const GAP = 8;
-
-  const totalFights = fights.length;
-  const HEIGHT = HEADER_H + totalFights * (FIGHT_ROW_H + GAP) + FOOTER_H + PADDING;
+  // Canvas dimensions — Instagram portrait 4:5
+  const W = 1080;
+  const HERO_H = 540;   // top half: main event fighter photos
+  const CARD_H = 720;   // bottom half: fight list
+  const H = HERO_H + CARD_H;
 
   const canvas = document.createElement("canvas");
-  canvas.width = WIDTH;
-  canvas.height = HEIGHT;
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext("2d")!;
 
-  // Background gradient
-  const bg = ctx.createLinearGradient(0, 0, 0, HEIGHT);
-  bg.addColorStop(0, "#0A0A0A");
-  bg.addColorStop(1, "#111111");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  // ── Background ──────────────────────────────────────────────────────────────
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, "#0A0A0A");
+  bgGrad.addColorStop(0.5, "#111111");
+  bgGrad.addColorStop(1, "#0D0D0D");
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
 
-  // Gold border frame
-  ctx.strokeStyle = "#C9A84C";
+  // ── Hero section: main event fighter photos ──────────────────────────────────
+  const mainFight = fights.find((f) => f.isMainEvent) ?? fights[0];
+  const mainPred = mainFight
+    ? fightsWithPreds.find((f) => f.id === mainFight.id)?.userPrediction
+    : null;
+
+  // Load fighter images via proxy
+  const [img1, img2] = await Promise.all([
+    mainFight?.fighter1ImageUrl ? loadImage(proxyUrl(mainFight.fighter1ImageUrl)!) : Promise.resolve(null),
+    mainFight?.fighter2ImageUrl ? loadImage(proxyUrl(mainFight.fighter2ImageUrl)!) : Promise.resolve(null),
+  ]);
+
+  // Left fighter (fighter1) — mirrored to face right
+  if (img1) {
+    const imgW = W / 2 + 60;
+    const imgH = HERO_H + 40;
+    const scale = Math.max(imgW / img1.naturalWidth, imgH / img1.naturalHeight);
+    const dw = img1.naturalWidth * scale;
+    const dh = img1.naturalHeight * scale;
+    const dx = (W / 2 - dw) / 2;
+    const dy = HERO_H - dh + 20;
+
+    // Clip to left half
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, W / 2, HERO_H);
+    ctx.clip();
+
+    // Mirror horizontally so fighter faces right (toward center)
+    ctx.save();
+    ctx.translate(W / 2, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img1, dx - W / 2 + W / 2, dy, dw, dh);
+    ctx.restore();
+
+    // Gold outline if picked winner
+    if (mainPred?.pickedWinner === mainFight?.fighter1Name) {
+      const grad = ctx.createLinearGradient(0, 0, W / 2, 0);
+      grad.addColorStop(0, "rgba(201,168,76,0)");
+      grad.addColorStop(0.7, "rgba(201,168,76,0.15)");
+      grad.addColorStop(1, "rgba(201,168,76,0.35)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W / 2, HERO_H);
+    }
+    // Red X overlay if picked loser
+    if (mainPred && mainPred.pickedWinner !== mainFight?.fighter1Name) {
+      ctx.fillStyle = "rgba(210,10,10,0.18)";
+      ctx.fillRect(0, 0, W / 2, HERO_H);
+      // Draw X
+      ctx.strokeStyle = "rgba(210,10,10,0.5)";
+      ctx.lineWidth = 12;
+      ctx.beginPath();
+      ctx.moveTo(20, 20);
+      ctx.lineTo(W / 2 - 20, HERO_H - 20);
+      ctx.moveTo(W / 2 - 20, 20);
+      ctx.lineTo(20, HERO_H - 20);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // Right fighter (fighter2) — faces left (natural)
+  if (img2) {
+    const imgW = W / 2 + 60;
+    const imgH = HERO_H + 40;
+    const scale = Math.max(imgW / img2.naturalWidth, imgH / img2.naturalHeight);
+    const dw = img2.naturalWidth * scale;
+    const dh = img2.naturalHeight * scale;
+    const dx = W / 2 + (W / 2 - dw) / 2;
+    const dy = HERO_H - dh + 20;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(W / 2, 0, W / 2, HERO_H);
+    ctx.clip();
+    ctx.drawImage(img2, dx, dy, dw, dh);
+
+    // Gold outline if picked winner
+    if (mainPred?.pickedWinner === mainFight?.fighter2Name) {
+      const grad = ctx.createLinearGradient(W / 2, 0, W, 0);
+      grad.addColorStop(0, "rgba(201,168,76,0.35)");
+      grad.addColorStop(0.3, "rgba(201,168,76,0.15)");
+      grad.addColorStop(1, "rgba(201,168,76,0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(W / 2, 0, W / 2, HERO_H);
+    }
+    // Red X overlay if picked loser
+    if (mainPred && mainPred.pickedWinner !== mainFight?.fighter2Name) {
+      ctx.fillStyle = "rgba(210,10,10,0.18)";
+      ctx.fillRect(W / 2, 0, W / 2, HERO_H);
+      ctx.strokeStyle = "rgba(210,10,10,0.5)";
+      ctx.lineWidth = 12;
+      ctx.beginPath();
+      ctx.moveTo(W / 2 + 20, 20);
+      ctx.lineTo(W - 20, HERO_H - 20);
+      ctx.moveTo(W - 20, 20);
+      ctx.lineTo(W / 2 + 20, HERO_H - 20);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // Center divider line
+  ctx.strokeStyle = "#D20A0A";
   ctx.lineWidth = 4;
-  ctx.strokeRect(8, 8, WIDTH - 16, HEIGHT - 16);
+  ctx.beginPath();
+  ctx.moveTo(W / 2, 0);
+  ctx.lineTo(W / 2, HERO_H - 60);
+  ctx.stroke();
 
-  // Red accent top bar
+  // VS badge in center
+  const vsSize = 64;
+  const vsX = W / 2 - vsSize / 2;
+  const vsY = HERO_H / 2 - vsSize / 2;
+  drawRoundedRect(ctx, vsX, vsY, vsSize, vsSize, 8);
   ctx.fillStyle = "#D20A0A";
-  ctx.fillRect(8, 8, WIDTH - 16, 6);
-
-  // Header section
-  const headerY = 40;
-
-  // UFC logo text / branding
+  ctx.fill();
   ctx.font = "bold 28px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  ctx.fillStyle = "#C9A84C";
-  ctx.textAlign = "center";
-  ctx.fillText("FIGHTCRED", WIDTH / 2, headerY + 30);
-
-  // Event name
-  ctx.font = "bold 42px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
   ctx.fillStyle = "#FFFFFF";
   ctx.textAlign = "center";
-  // Truncate long event names
-  let eventNameDisplay = eventName;
-  if (ctx.measureText(eventNameDisplay).width > WIDTH - 80) {
-    while (ctx.measureText(eventNameDisplay + "…").width > WIDTH - 80 && eventNameDisplay.length > 0) {
-      eventNameDisplay = eventNameDisplay.slice(0, -1);
-    }
-    eventNameDisplay += "…";
-  }
-  ctx.fillText(eventNameDisplay, WIDTH / 2, headerY + 80);
+  ctx.textBaseline = "middle";
+  ctx.fillText("VS", W / 2, vsY + vsSize / 2);
+  ctx.textBaseline = "alphabetic";
+
+  // Hero gradient overlay (bottom fade into card section)
+  const heroFade = ctx.createLinearGradient(0, HERO_H - 120, 0, HERO_H);
+  heroFade.addColorStop(0, "rgba(10,10,10,0)");
+  heroFade.addColorStop(1, "rgba(10,10,10,1)");
+  ctx.fillStyle = heroFade;
+  ctx.fillRect(0, HERO_H - 120, W, 120);
+
+  // Top gradient overlay (for text readability)
+  const topFade = ctx.createLinearGradient(0, 0, 0, 100);
+  topFade.addColorStop(0, "rgba(0,0,0,0.7)");
+  topFade.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = topFade;
+  ctx.fillRect(0, 0, W, 100);
+
+  // ── Hero text overlay ────────────────────────────────────────────────────────
+  // FightCred logo text top-left
+  ctx.font = "bold 26px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.fillStyle = "#C9A84C";
+  ctx.textAlign = "left";
+  ctx.fillText("FIGHTCRED", 32, 44);
+
+  // Event name top-center
+  ctx.font = "bold 30px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.fillStyle = "#FFFFFF";
+  ctx.textAlign = "center";
+  const shortName = eventName.replace("UFC Fight Night: ", "UFC FN: ").replace("UFC ", "UFC ");
+  ctx.fillText(truncate(ctx, shortName, W - 80), W / 2, 44);
 
   // Event date
-  ctx.font = "500 26px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.font = "500 22px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
   ctx.fillStyle = "#9A9A9A";
   ctx.textAlign = "center";
   try {
-    const dateStr = new Date(eventDate).toLocaleDateString("en-US", {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-    });
-    ctx.fillText(dateStr, WIDTH / 2, headerY + 118);
-  } catch {
-    ctx.fillText(eventDate, WIDTH / 2, headerY + 118);
-  }
+    const ds = new Date(eventDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    ctx.fillText(ds, W / 2, 72);
+  } catch { /* ignore */ }
 
-  // Divider line
-  ctx.strokeStyle = "#333333";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(PADDING, HEADER_H);
-  ctx.lineTo(WIDTH - PADDING, HEADER_H);
-  ctx.stroke();
-
-  // Fight rows
-  let rowY = HEADER_H + PADDING / 2;
-
-  for (const fight of fights) {
-    const pred = fightsWithPreds.find((f) => f.id === fight.id)?.userPrediction;
-    const hasPick = !!pred;
-    const isCorrect = pred?.status === "correct";
-    const isWrong = pred?.status === "wrong";
-
-    // Row background
-    const rowBg = fight.isMainEvent ? "#1E1A10" : "#141414";
-    drawRoundedRect(ctx, PADDING, rowY, WIDTH - PADDING * 2, FIGHT_ROW_H, 10);
-    ctx.fillStyle = rowBg;
-    ctx.fill();
-
-    // Main event gold border
-    if (fight.isMainEvent) {
-      ctx.strokeStyle = "#C9A84C40";
-      ctx.lineWidth = 1.5;
-      drawRoundedRect(ctx, PADDING, rowY, WIDTH - PADDING * 2, FIGHT_ROW_H, 10);
-      ctx.stroke();
-    }
-
-    const rowCenterY = rowY + FIGHT_ROW_H / 2;
-    const innerX = PADDING + 16;
-    const innerW = WIDTH - PADDING * 2 - 32;
-
-    // Fighter names
-    const nameAreaW = innerW * 0.38;
-    const vsAreaW = innerW * 0.12;
-    const pickAreaW = innerW * 0.38;
-    const statusAreaW = innerW * 0.12;
-
-    // Fighter 1 name
-    ctx.font = "bold 22px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    ctx.fillStyle = hasPick && pred?.pickedWinner === fight.fighter1Name ? "#FFFFFF" : "#AAAAAA";
+  // Fighter names at bottom of hero
+  if (mainFight) {
+    // Fighter 1 name (left)
+    ctx.font = "bold 36px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
     ctx.textAlign = "left";
-    let f1Name = fight.fighter1Name;
-    const f1MaxW = nameAreaW - 10;
-    while (ctx.measureText(f1Name).width > f1MaxW && f1Name.length > 0) {
-      f1Name = f1Name.slice(0, -1);
-    }
-    if (f1Name !== fight.fighter1Name) f1Name += "…";
-    ctx.fillText(f1Name, innerX, rowCenterY - 6);
+    const f1Color = mainPred?.pickedWinner === mainFight.fighter1Name ? "#C9A84C" : "#FFFFFF";
+    ctx.fillStyle = f1Color;
+    const f1Parts = mainFight.fighter1Name.split(" ");
+    const f1Last = f1Parts[f1Parts.length - 1].toUpperCase();
+    ctx.fillText(truncate(ctx, f1Last, W / 2 - 40), 28, HERO_H - 24);
 
-    // Fighter 1 last name (smaller)
-    ctx.font = "500 18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    ctx.fillStyle = "#666666";
-    if (fight.weightClass) {
-      ctx.fillText(fight.weightClass, innerX, rowCenterY + 16);
-    }
-
-    // VS
-    ctx.font = "bold 18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    ctx.fillStyle = "#555555";
-    ctx.textAlign = "center";
-    ctx.fillText("VS", innerX + nameAreaW + vsAreaW / 2, rowCenterY + 6);
-
-    // Fighter 2 name
-    ctx.font = "bold 22px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    ctx.fillStyle = hasPick && pred?.pickedWinner === fight.fighter2Name ? "#FFFFFF" : "#AAAAAA";
+    // Fighter 2 name (right)
     ctx.textAlign = "right";
-    let f2Name = fight.fighter2Name;
-    const f2MaxW = nameAreaW - 10;
-    while (ctx.measureText(f2Name).width > f2MaxW && f2Name.length > 0) {
-      f2Name = f2Name.slice(0, -1);
-    }
-    if (f2Name !== fight.fighter2Name) f2Name += "…";
-    ctx.fillText(f2Name, innerX + nameAreaW + vsAreaW + nameAreaW, rowCenterY - 6);
+    const f2Color = mainPred?.pickedWinner === mainFight.fighter2Name ? "#C9A84C" : "#FFFFFF";
+    ctx.fillStyle = f2Color;
+    const f2Parts = mainFight.fighter2Name.split(" ");
+    const f2Last = f2Parts[f2Parts.length - 1].toUpperCase();
+    ctx.fillText(truncate(ctx, f2Last, W / 2 - 40), W - 28, HERO_H - 24);
 
-    // Pick indicator
-    if (hasPick && pred) {
-      const pickX = innerX + nameAreaW * 2 + vsAreaW + 8;
-      const pickW = pickAreaW - 8;
-      const pickH = 34;
-      const pickY = rowCenterY - pickH / 2;
-
-      // Pick background
-      const pickBg = isCorrect ? "#14532d" : isWrong ? "#450a0a" : "#1C1C1C";
-      const pickBorder = isCorrect ? "#22c55e" : isWrong ? "#ef4444" : "#C9A84C";
-      drawRoundedRect(ctx, pickX, pickY, pickW, pickH, 6);
-      ctx.fillStyle = pickBg;
-      ctx.fill();
-      ctx.strokeStyle = pickBorder;
-      ctx.lineWidth = 1.5;
-      drawRoundedRect(ctx, pickX, pickY, pickW, pickH, 6);
-      ctx.stroke();
-
-      // Pick text
-      const pickLabel = isCorrect ? "✓ " : isWrong ? "✗ " : "→ ";
-      ctx.font = "bold 17px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      ctx.fillStyle = isCorrect ? "#4ade80" : isWrong ? "#f87171" : "#C9A84C";
+    // Pick indicator under names
+    if (mainPred) {
+      ctx.font = "600 18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
       ctx.textAlign = "center";
-
-      let pickedName = pred.pickedWinner;
-      // Shorten to last name
-      const parts = pickedName.split(" ");
-      if (parts.length > 1) pickedName = parts[parts.length - 1];
-
-      const maxPickW = pickW - 16;
-      while (ctx.measureText(pickLabel + pickedName).width > maxPickW && pickedName.length > 0) {
-        pickedName = pickedName.slice(0, -1);
-      }
-      ctx.fillText(pickLabel + pickedName, pickX + pickW / 2, rowCenterY + 6);
-
-      // Method badge
-      if (pred.pickedMethod) {
-        const methodLabel =
-          pred.pickedMethod === "tko_ko" ? "TKO/KO" :
-          pred.pickedMethod === "submission" ? "SUB" : "DEC";
-        ctx.font = "500 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-        ctx.fillStyle = "#666666";
-        ctx.textAlign = "center";
-        ctx.fillText(methodLabel, pickX + pickW / 2, rowCenterY + 22);
-      }
-    } else {
-      // No pick placeholder
-      const pickX = innerX + nameAreaW * 2 + vsAreaW + 8;
-      const pickW = pickAreaW - 8;
-      ctx.font = "500 16px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      ctx.fillStyle = "#333333";
-      ctx.textAlign = "center";
-      ctx.fillText("No Pick", pickX + pickW / 2, rowCenterY + 6);
+      ctx.fillStyle = "#C9A84C";
+      const pickedLast = mainPred.pickedWinner.split(" ").pop()?.toUpperCase() ?? "";
+      const methodLabel = mainPred.pickedMethod === "tko_ko" ? " · TKO/KO" :
+        mainPred.pickedMethod === "submission" ? " · SUB" :
+        mainPred.pickedMethod === "decision" ? " · DEC" : "";
+      ctx.fillText(`MY PICK: ${pickedLast}${methodLabel}`, W / 2, HERO_H - 24);
     }
-
-    rowY += FIGHT_ROW_H + GAP;
   }
 
-  // Footer
-  const footerY = rowY + PADDING / 2;
+  // ── Card section: fight list ─────────────────────────────────────────────────
+  const cardY = HERO_H;
+  const PAD = 28;
+  const ROW_H = 62;
+  const ROW_GAP = 6;
+
+  // Section header
+  ctx.font = "bold 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.fillStyle = "#9A9A9A";
+  ctx.textAlign = "left";
+  ctx.fillText("MY PICKS", PAD, cardY + 36);
 
   // Divider
   ctx.strokeStyle = "#333333";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(PADDING, footerY);
-  ctx.lineTo(WIDTH - PADDING, footerY);
+  ctx.moveTo(PAD, cardY + 46);
+  ctx.lineTo(W - PAD, cardY + 46);
+  ctx.stroke();
+
+  let rowY = cardY + 56;
+  const maxRows = Math.floor((CARD_H - 100) / (ROW_H + ROW_GAP));
+  const displayFights = fights.slice(0, maxRows);
+
+  for (const fight of displayFights) {
+    const pred = fightsWithPreds.find((f) => f.id === fight.id)?.userPrediction;
+    const isCorrect = pred?.status === "correct";
+    const isWrong = pred?.status === "wrong";
+    const hasPick = !!pred;
+
+    // Row background
+    drawRoundedRect(ctx, PAD, rowY, W - PAD * 2, ROW_H, 10);
+    ctx.fillStyle = fight.isMainEvent ? "#1C1810" : "#141414";
+    ctx.fill();
+
+    // Main event gold border
+    if (fight.isMainEvent) {
+      ctx.strokeStyle = "rgba(201,168,76,0.3)";
+      ctx.lineWidth = 1.5;
+      drawRoundedRect(ctx, PAD, rowY, W - PAD * 2, ROW_H, 10);
+      ctx.stroke();
+    }
+
+    const innerX = PAD + 16;
+    const innerW = W - PAD * 2 - 32;
+    const rowMid = rowY + ROW_H / 2;
+
+    // ── Fighter 1 (left) ──
+    const f1Picked = hasPick && pred?.pickedWinner === fight.fighter1Name;
+    const f1Loser = hasPick && pred?.pickedWinner !== fight.fighter1Name;
+
+    ctx.font = `${f1Picked ? "bold" : "500"} 22px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+    ctx.fillStyle = f1Picked ? "#C9A84C" : f1Loser ? "#555555" : "#CCCCCC";
+    ctx.textAlign = "left";
+    const f1Name = truncate(ctx, fight.fighter1Name, innerW * 0.35);
+    ctx.fillText(f1Name, innerX, rowMid - 4);
+
+    // Record
+    if ((fight as Fight & { fighter1Record?: string }).fighter1Record) {
+      ctx.font = "400 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = "#555555";
+      ctx.fillText((fight as Fight & { fighter1Record?: string }).fighter1Record!, innerX, rowMid + 16);
+    }
+
+    // Gold winner tick
+    if (f1Picked) {
+      ctx.font = "bold 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = "#C9A84C";
+      ctx.fillText("✓", innerX + ctx.measureText(f1Name).width + 8, rowMid - 4);
+    }
+    // Red X for loser
+    if (f1Loser && hasPick) {
+      ctx.font = "bold 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = "#D20A0A";
+      ctx.fillText("✗", innerX + ctx.measureText(f1Name).width + 8, rowMid - 4);
+    }
+
+    // ── VS center ──
+    ctx.font = "bold 16px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.fillStyle = "#444444";
+    ctx.textAlign = "center";
+    ctx.fillText("VS", W / 2, rowMid + 6);
+
+    // ── Fighter 2 (right) ──
+    const f2Picked = hasPick && pred?.pickedWinner === fight.fighter2Name;
+    const f2Loser = hasPick && pred?.pickedWinner !== fight.fighter2Name;
+
+    ctx.font = `${f2Picked ? "bold" : "500"} 22px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+    ctx.fillStyle = f2Picked ? "#C9A84C" : f2Loser ? "#555555" : "#CCCCCC";
+    ctx.textAlign = "right";
+    const f2Name = truncate(ctx, fight.fighter2Name, innerW * 0.35);
+    ctx.fillText(f2Name, innerX + innerW, rowMid - 4);
+
+    // Gold winner tick
+    if (f2Picked) {
+      ctx.font = "bold 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = "#C9A84C";
+      ctx.textAlign = "right";
+      ctx.fillText("✓", innerX + innerW - ctx.measureText(f2Name).width - 8, rowMid - 4);
+    }
+    // Red X for loser
+    if (f2Loser && hasPick) {
+      ctx.font = "bold 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = "#D20A0A";
+      ctx.textAlign = "right";
+      ctx.fillText("✗", innerX + innerW - ctx.measureText(f2Name).width - 8, rowMid - 4);
+    }
+
+    // ── Method badge (right edge) ──
+    if (hasPick && pred?.pickedMethod) {
+      const methodLabel =
+        pred.pickedMethod === "tko_ko" ? "TKO/KO" :
+        pred.pickedMethod === "submission" ? "SUB" : "DEC";
+      const badgeColor = isCorrect ? "#22c55e" : isWrong ? "#ef4444" : "#C9A84C";
+      const badgeBg = isCorrect ? "rgba(34,197,94,0.12)" : isWrong ? "rgba(239,68,68,0.12)" : "rgba(201,168,76,0.12)";
+      ctx.font = "bold 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      const bw = ctx.measureText(methodLabel).width + 16;
+      const bh = 24;
+      const bx = W - PAD - 16 - bw;
+      const by = rowMid - bh / 2;
+      drawRoundedRect(ctx, bx, by, bw, bh, 5);
+      ctx.fillStyle = badgeBg;
+      ctx.fill();
+      ctx.strokeStyle = badgeColor;
+      ctx.lineWidth = 1;
+      drawRoundedRect(ctx, bx, by, bw, bh, 5);
+      ctx.stroke();
+      ctx.fillStyle = badgeColor;
+      ctx.textAlign = "center";
+      ctx.fillText(methodLabel, bx + bw / 2, by + bh / 2 + 5);
+    }
+
+    // No pick placeholder
+    if (!hasPick) {
+      ctx.font = "500 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = "#333333";
+      ctx.textAlign = "center";
+      ctx.fillText("— no pick —", W / 2, rowMid + 6);
+    }
+
+    rowY += ROW_H + ROW_GAP;
+  }
+
+  // ── Footer ───────────────────────────────────────────────────────────────────
+  const footerY = H - 60;
+
+  // Divider
+  ctx.strokeStyle = "#222222";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(PAD, footerY);
+  ctx.lineTo(W - PAD, footerY);
   ctx.stroke();
 
   // Username
-  ctx.font = "bold 28px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.font = "bold 26px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
   ctx.fillStyle = "#C9A84C";
   ctx.textAlign = "left";
-  ctx.fillText(`@${username || "FightCred"}`, PADDING, footerY + 44);
+  ctx.fillText(`@${username}`, PAD, footerY + 36);
 
-  // Branding
-  ctx.font = "500 22px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  ctx.fillStyle = "#555555";
-  ctx.textAlign = "right";
-  ctx.fillText("fightcred.app", WIDTH - PADDING, footerY + 44);
-
-  // Picks count
-  const picksCount = fightsWithPreds.filter((f) => f.userPrediction).length;
+  // Picks summary
+  const pickCount = fightsWithPreds.filter((f) => f.userPrediction).length;
   ctx.font = "500 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  ctx.fillStyle = "#9A9A9A";
-  ctx.textAlign = "left";
-  ctx.fillText(`${picksCount}/${fights.length} picks made`, PADDING, footerY + 76);
+  ctx.fillStyle = "#555555";
+  ctx.textAlign = "center";
+  ctx.fillText(`${pickCount}/${fights.length} picks`, W / 2, footerY + 36);
+
+  // Domain
+  ctx.font = "500 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.fillStyle = "#444444";
+  ctx.textAlign = "right";
+  ctx.fillText("fightcred.app", W - PAD, footerY + 36);
+
+  // Gold bottom bar
+  ctx.fillStyle = "#C9A84C";
+  ctx.fillRect(0, H - 6, W, 6);
+
+  // Red top bar
+  ctx.fillStyle = "#D20A0A";
+  ctx.fillRect(0, 0, W, 6);
 
   return canvas.toDataURL("image/png");
 }
 
-export function SharePicksButton({ eventName, eventDate, fights, fightsWithPreds, username }: Props) {
+// ─── Component ────────────────────────────────────────────────────────────────
+
+export function SharePicksButton({
+  eventName,
+  eventDate,
+  eventImageUrl,
+  fights,
+  fightsWithPreds,
+  username,
+}: Props) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -315,6 +509,7 @@ export function SharePicksButton({ eventName, eventDate, fights, fightsWithPreds
         fights,
         preds,
         username ?? "FightCred",
+        eventImageUrl,
       );
       setImageUrl(url);
       setShowPreview(true);
@@ -324,7 +519,7 @@ export function SharePicksButton({ eventName, eventDate, fights, fightsWithPreds
     } finally {
       setIsGenerating(false);
     }
-  }, [eventName, eventDate, fights, fightsWithPreds, username]);
+  }, [eventName, eventDate, eventImageUrl, fights, fightsWithPreds, username]);
 
   const handleDownload = useCallback(() => {
     if (!imageUrl) return;
@@ -346,9 +541,7 @@ export function SharePicksButton({ eventName, eventDate, fights, fightsWithPreds
           files: [file],
         });
         return;
-      } catch {
-        // Fall through to download
-      }
+      } catch { /* fall through */ }
     }
     handleDownload();
   }, [imageUrl, eventName, handleDownload]);
@@ -385,7 +578,7 @@ export function SharePicksButton({ eventName, eventDate, fights, fightsWithPreds
           onClick={() => setShowPreview(false)}
         >
           <div
-            className="bg-[#1A1A1A] border border-[#333] rounded-2xl overflow-hidden max-w-lg w-full"
+            className="bg-[#1A1A1A] border border-[#333] rounded-2xl overflow-hidden max-w-sm w-full"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
@@ -403,7 +596,7 @@ export function SharePicksButton({ eventName, eventDate, fights, fightsWithPreds
             </div>
 
             {/* Image preview */}
-            <div className="p-4">
+            <div className="p-3">
               <img
                 src={imageUrl}
                 alt="Your picks card"
@@ -412,7 +605,7 @@ export function SharePicksButton({ eventName, eventDate, fights, fightsWithPreds
             </div>
 
             {/* Actions */}
-            <div className="flex gap-3 p-4 pt-0">
+            <div className="flex gap-3 p-3 pt-0">
               <button
                 onClick={handleDownload}
                 className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-[#C9A84C] hover:bg-[#b8973f] text-black font-bold text-sm transition-colors"
