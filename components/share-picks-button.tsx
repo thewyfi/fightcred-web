@@ -9,8 +9,6 @@ type Fight = {
   fighter2Name: string;
   fighter1Record?: string | null;
   fighter2Record?: string | null;
-  fighter1ImageUrl?: string | null;
-  fighter2ImageUrl?: string | null;
   cardSection: string;
   isMainEvent: boolean;
   isTitleFight: boolean;
@@ -38,7 +36,7 @@ interface Props {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function drawRoundedRect(
+function rrect(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number, h: number, r: number,
 ) {
@@ -55,41 +53,42 @@ function drawRoundedRect(
   ctx.closePath();
 }
 
-function fitText(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxW: number,
-  maxSize: number,
-  minSize = 14,
-): number {
-  let size = maxSize;
-  ctx.font = `900 ${size}px 'Arial Black', Arial, sans-serif`;
-  while (ctx.measureText(text).width > maxW && size > minSize) {
-    size -= 2;
-    ctx.font = `900 ${size}px 'Arial Black', Arial, sans-serif`;
-  }
-  return size;
+function tw(ctx: CanvasRenderingContext2D, text: string): number {
+  return ctx.measureText(text).width;
+}
+
+function setFont(ctx: CanvasRenderingContext2D, size: number, bold = false) {
+  ctx.font = `${bold ? "900" : "400"} ${size}px 'Arial Black', Arial, sans-serif`;
+}
+
+function drawCentered(ctx: CanvasRenderingContext2D, text: string, cx: number, y: number) {
+  ctx.fillText(text, cx - tw(ctx, text) / 2, y);
+}
+
+function drawRight(ctx: CanvasRenderingContext2D, text: string, rx: number, y: number) {
+  ctx.fillText(text, rx - tw(ctx, text), y);
+}
+
+function methodShort(method?: string | null): string {
+  if (method === "tko_ko")      return "TKO/KO";
+  if (method === "submission")  return "SUB";
+  if (method === "decision")    return "DEC";
+  return method?.toUpperCase() ?? "DEC";
+}
+
+function methodDetail(method?: string | null, finishType?: string | null): string {
+  if (finishType === "decision" || method == null) return "DECISION";
+  if (method === "tko_ko")     return "TKO / KO";
+  if (method === "submission") return "SUBMISSION";
+  return "FINISH";
 }
 
 function lastName(name: string): string {
-  const parts = name.trim().split(" ");
-  return parts[parts.length - 1].toUpperCase();
+  return name.trim().split(" ").pop()!.toUpperCase();
 }
 
-function proxyUrl(url: string | null | undefined): string | null {
-  if (!url) return null;
-  return `/api/img-proxy?url=${encodeURIComponent(url)}`;
-}
-
-async function loadImage(src: string): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = src;
-    setTimeout(() => resolve(null), 5000);
-  });
+function firstName(name: string): string {
+  return name.trim().split(" ").slice(0, -1).join(" ").toUpperCase();
 }
 
 // ─── Main generator ───────────────────────────────────────────────────────────
@@ -101,16 +100,23 @@ async function generateShareImage(
   fightsWithPreds: FightWithPred[],
   username: string,
 ): Promise<string> {
-  const W = 1080;
-  const HERO_H = 480;
-  const ROW_H = 66;
-  const ROW_GAP = 8;
-  const PAD = 32;
-  const FOOTER_H = 80;
-  const SECTION_HEADER_H = 48;
+  const W       = 1080;
+  const PAD     = 36;
+  const HERO_H  = 420;
+  const ROW_H   = 76;
+  const ROW_GAP = 7;
+  const SEC_H   = 52;
+  const FOOT_H  = 90;
+  const H       = HERO_H + SEC_H + (ROW_H + ROW_GAP) * fights.length + FOOT_H + 16;
 
-  const maxFights = fights.length;
-  const H = HERO_H + SECTION_HEADER_H + (ROW_H + ROW_GAP) * maxFights + FOOTER_H + 20;
+  const GOLD     = "#C9A84C";
+  const GOLD_DIM = "#786428";
+  const RED      = "#D20A0A";
+  const WHITE    = "#FFFFFF";
+  const GREY     = "#464646";
+  const MUTED    = "#6E6E6E";
+  const DARK_ROW = "#0F0F0F";
+  const MAIN_ROW = "#16120A";
 
   const canvas = document.createElement("canvas");
   canvas.width = W;
@@ -118,488 +124,315 @@ async function generateShareImage(
   const ctx = canvas.getContext("2d")!;
 
   // ── Full background ──────────────────────────────────────────────────────────
-  ctx.fillStyle = "#0A0A0A";
+  ctx.fillStyle = "#080808";
   ctx.fillRect(0, 0, W, H);
 
-  // Subtle diagonal texture lines
-  ctx.strokeStyle = "rgba(255,255,255,0.015)";
+  // Diagonal texture
+  ctx.strokeStyle = "rgba(255,255,255,0.018)";
   ctx.lineWidth = 1;
-  for (let i = -H; i < W + H; i += 40) {
-    ctx.beginPath();
-    ctx.moveTo(i, 0);
-    ctx.lineTo(i + H, H);
-    ctx.stroke();
+  for (let i = -H; i < W + H; i += 50) {
+    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + H, H); ctx.stroke();
   }
 
-  // ── HERO SECTION ─────────────────────────────────────────────────────────────
-  // Try to load fighter images from proxy
-  const mainFight = fights.find((f) => f.isMainEvent) ?? fights[0];
-  const mainPred = mainFight
-    ? fightsWithPreds.find((f) => f.id === mainFight.id)?.userPrediction
-    : null;
-
-  const [img1, img2] = await Promise.all([
-    mainFight?.fighter1ImageUrl ? loadImage(proxyUrl(mainFight.fighter1ImageUrl)!) : Promise.resolve(null),
-    mainFight?.fighter2ImageUrl ? loadImage(proxyUrl(mainFight.fighter2ImageUrl)!) : Promise.resolve(null),
-  ]);
-
-  // Hero background gradient
+  // ── HERO gradient background ─────────────────────────────────────────────────
   const heroBg = ctx.createLinearGradient(0, 0, W, HERO_H);
-  heroBg.addColorStop(0, "#1A0000");
-  heroBg.addColorStop(0.5, "#0D0D0D");
-  heroBg.addColorStop(1, "#001A00");
+  heroBg.addColorStop(0, "#160000");
+  heroBg.addColorStop(0.5, "#0A0A0A");
+  heroBg.addColorStop(1, "#001000");
   ctx.fillStyle = heroBg;
   ctx.fillRect(0, 0, W, HERO_H);
 
-  // Draw fighter images if available
-  const hasImages = img1 || img2;
+  // Red top bar
+  ctx.fillStyle = RED;
+  ctx.fillRect(0, 0, W, 8);
 
-  if (hasImages) {
-    // Left fighter
-    if (img1) {
-      const scale = Math.max((W / 2 + 80) / img1.naturalWidth, (HERO_H + 40) / img1.naturalHeight);
-      const dw = img1.naturalWidth * scale;
-      const dh = img1.naturalHeight * scale;
-      const dx = (W / 2 - dw) / 2;
-      const dy = HERO_H - dh + 10;
+  // Gold side bars
+  ctx.fillStyle = GOLD;
+  ctx.fillRect(0, 8, 4, HERO_H);
+  ctx.fillRect(W - 4, 8, 4, HERO_H);
 
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 0, W / 2, HERO_H);
-      ctx.clip();
-      // Mirror to face right
-      ctx.save();
-      ctx.translate(W / 2, 0);
-      ctx.scale(-1, 1);
-      ctx.globalAlpha = 0.85;
-      ctx.drawImage(img1, dx - W / 2 + W / 2, dy, dw, dh);
-      ctx.restore();
-      // Gold overlay if picked winner
-      if (mainPred?.pickedWinner === mainFight?.fighter1Name) {
-        const g = ctx.createLinearGradient(0, 0, W / 2, 0);
-        g.addColorStop(0, "rgba(201,168,76,0)");
-        g.addColorStop(1, "rgba(201,168,76,0.2)");
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, W / 2, HERO_H);
-      } else if (mainPred) {
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = "rgba(180,0,0,0.2)";
-        ctx.fillRect(0, 0, W / 2, HERO_H);
-        // Red X
-        ctx.strokeStyle = "rgba(210,10,10,0.55)";
-        ctx.lineWidth = 14;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(30, 30); ctx.lineTo(W / 2 - 30, HERO_H - 80);
-        ctx.moveTo(W / 2 - 30, 30); ctx.lineTo(30, HERO_H - 80);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
+  // ── Brand + Event header ──────────────────────────────────────────────────────
+  setFont(ctx, 26, true);
+  ctx.fillStyle = GOLD;
+  ctx.textBaseline = "top";
+  ctx.fillText("FIGHTCRED", PAD + 8, 20);
 
-    // Right fighter
-    if (img2) {
-      const scale = Math.max((W / 2 + 80) / img2.naturalWidth, (HERO_H + 40) / img2.naturalHeight);
-      const dw = img2.naturalWidth * scale;
-      const dh = img2.naturalHeight * scale;
-      const dx = W / 2 + (W / 2 - dw) / 2;
-      const dy = HERO_H - dh + 10;
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(W / 2, 0, W / 2, HERO_H);
-      ctx.clip();
-      ctx.globalAlpha = 0.85;
-      ctx.drawImage(img2, dx, dy, dw, dh);
-      // Gold overlay if picked winner
-      if (mainPred?.pickedWinner === mainFight?.fighter2Name) {
-        const g = ctx.createLinearGradient(W / 2, 0, W, 0);
-        g.addColorStop(0, "rgba(201,168,76,0.2)");
-        g.addColorStop(1, "rgba(201,168,76,0)");
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = g;
-        ctx.fillRect(W / 2, 0, W / 2, HERO_H);
-      } else if (mainPred) {
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = "rgba(180,0,0,0.2)";
-        ctx.fillRect(W / 2, 0, W / 2, HERO_H);
-        ctx.strokeStyle = "rgba(210,10,10,0.55)";
-        ctx.lineWidth = 14;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(W / 2 + 30, 30); ctx.lineTo(W - 30, HERO_H - 80);
-        ctx.moveTo(W - 30, 30); ctx.lineTo(W / 2 + 30, HERO_H - 80);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-  } else {
-    // No images — draw stylized name blocks
-    if (mainFight) {
-      const f1Picked = mainPred?.pickedWinner === mainFight.fighter1Name;
-      const f2Picked = mainPred?.pickedWinner === mainFight.fighter2Name;
-
-      // Left fighter block
-      const leftGrad = ctx.createLinearGradient(0, 0, W / 2, HERO_H);
-      leftGrad.addColorStop(0, f1Picked ? "rgba(201,168,76,0.15)" : "rgba(180,0,0,0.08)");
-      leftGrad.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = leftGrad;
-      ctx.fillRect(0, 0, W / 2, HERO_H);
-
-      // Right fighter block
-      const rightGrad = ctx.createLinearGradient(W / 2, 0, W, HERO_H);
-      rightGrad.addColorStop(0, "rgba(0,0,0,0)");
-      rightGrad.addColorStop(1, f2Picked ? "rgba(201,168,76,0.15)" : "rgba(180,0,0,0.08)");
-      ctx.fillStyle = rightGrad;
-      ctx.fillRect(W / 2, 0, W / 2, HERO_H);
-
-      // Large fighter last names as background art
-      ctx.save();
-      ctx.globalAlpha = 0.06;
-      ctx.font = `900 180px 'Arial Black', Arial, sans-serif`;
-      ctx.fillStyle = "#FFFFFF";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(lastName(mainFight.fighter1Name), W / 4, HERO_H / 2);
-      ctx.fillText(lastName(mainFight.fighter2Name), (W / 4) * 3, HERO_H / 2);
-      ctx.restore();
-
-      // Red X on loser side
-      if (mainPred && !f1Picked) {
-        ctx.strokeStyle = "rgba(210,10,10,0.4)";
-        ctx.lineWidth = 12;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(40, 60); ctx.lineTo(W / 2 - 40, HERO_H - 100);
-        ctx.moveTo(W / 2 - 40, 60); ctx.lineTo(40, HERO_H - 100);
-        ctx.stroke();
-      }
-      if (mainPred && !f2Picked) {
-        ctx.strokeStyle = "rgba(210,10,10,0.4)";
-        ctx.lineWidth = 12;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(W / 2 + 40, 60); ctx.lineTo(W - 40, HERO_H - 100);
-        ctx.moveTo(W - 40, 60); ctx.lineTo(W / 2 + 40, HERO_H - 100);
-        ctx.stroke();
-      }
-    }
-  }
-
-  // Hero bottom gradient fade
-  const heroFade = ctx.createLinearGradient(0, HERO_H - 160, 0, HERO_H);
-  heroFade.addColorStop(0, "rgba(10,10,10,0)");
-  heroFade.addColorStop(1, "rgba(10,10,10,1)");
-  ctx.fillStyle = heroFade;
-  ctx.fillRect(0, HERO_H - 160, W, 160);
-
-  // Hero top gradient
-  const topFade = ctx.createLinearGradient(0, 0, 0, 120);
-  topFade.addColorStop(0, "rgba(0,0,0,0.85)");
-  topFade.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = topFade;
-  ctx.fillRect(0, 0, W, 120);
-
-  // ── Red top bar ──────────────────────────────────────────────────────────────
-  ctx.fillStyle = "#D20A0A";
-  ctx.fillRect(0, 0, W, 7);
-
-  // ── FIGHTCRED logo ───────────────────────────────────────────────────────────
-  ctx.font = `bold 28px 'Arial Black', Arial, sans-serif`;
-  ctx.fillStyle = "#C9A84C";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "alphabetic";
-  ctx.fillText("FIGHTCRED", PAD, 52);
-
-  // ── Event name ───────────────────────────────────────────────────────────────
-  ctx.font = `bold 34px 'Arial Black', Arial, sans-serif`;
-  ctx.fillStyle = "#FFFFFF";
-  ctx.textAlign = "center";
-  // Shorten "UFC Fight Night:" to "UFC FN:"
+  // Event name (shortened)
   const shortEvent = eventName
     .replace("UFC Fight Night: ", "UFC FN: ")
-    .replace("UFC ", "UFC ");
-  ctx.fillText(shortEvent, W / 2, 52);
+    .replace(/^UFC /, "UFC ");
+  setFont(ctx, 32, true);
+  ctx.fillStyle = WHITE;
+  drawCentered(ctx, shortEvent, W / 2, 18);
 
-  // Event date
-  ctx.font = `500 22px Arial, sans-serif`;
-  ctx.fillStyle = "#888888";
-  ctx.textAlign = "center";
+  setFont(ctx, 20, false);
+  ctx.fillStyle = MUTED;
   try {
     const ds = new Date(eventDate).toLocaleDateString("en-US", {
       weekday: "long", month: "long", day: "numeric", year: "numeric",
     });
-    ctx.fillText(ds, W / 2, 80);
-  } catch { /* ignore */ }
+    drawCentered(ctx, ds, W / 2, 58);
+  } catch { drawCentered(ctx, eventDate, W / 2, 58); }
 
   // ── Center divider ───────────────────────────────────────────────────────────
-  ctx.strokeStyle = "#D20A0A";
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(W / 2, 100);
-  ctx.lineTo(W / 2, HERO_H - 120);
-  ctx.stroke();
+  ctx.strokeStyle = "rgba(120,0,0,0.7)";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(W / 2, 90); ctx.lineTo(W / 2, HERO_H - 90); ctx.stroke();
 
   // ── VS badge ─────────────────────────────────────────────────────────────────
-  const vsY = HERO_H / 2 - 36;
-  drawRoundedRect(ctx, W / 2 - 36, vsY, 72, 72, 10);
-  ctx.fillStyle = "#D20A0A";
-  ctx.fill();
-  ctx.font = `900 30px 'Arial Black', Arial, sans-serif`;
-  ctx.fillStyle = "#FFFFFF";
-  ctx.textAlign = "center";
+  const vsSz = 70;
+  const vx = W / 2 - vsSz / 2;
+  const vy = HERO_H / 2 - vsSz / 2 - 10;
+  rrect(ctx, vx, vy, vsSz, vsSz, 10);
+  ctx.fillStyle = RED; ctx.fill();
+  setFont(ctx, 34, true);
+  ctx.fillStyle = WHITE;
   ctx.textBaseline = "middle";
-  ctx.fillText("VS", W / 2, vsY + 36);
-  ctx.textBaseline = "alphabetic";
+  drawCentered(ctx, "VS", W / 2, vy + vsSz / 2);
+  ctx.textBaseline = "top";
 
-  // ── Main event fighter names ──────────────────────────────────────────────────
-  if (mainFight) {
-    const f1Picked = mainPred?.pickedWinner === mainFight.fighter1Name;
-    const f2Picked = mainPred?.pickedWinner === mainFight.fighter2Name;
+  // ── Main event fighters ───────────────────────────────────────────────────────
+  const mainFight = fights.find(f => f.isMainEvent) ?? fights[0];
+  const mainPred  = mainFight
+    ? fightsWithPreds.find(f => f.id === mainFight.id)?.userPrediction
+    : null;
 
-    // Fighter 1 — last name large, left aligned
-    const f1Last = lastName(mainFight.fighter1Name);
-    const f1Size = fitText(ctx, f1Last, W / 2 - 60, 88, 40);
-    ctx.font = `900 ${f1Size}px 'Arial Black', Arial, sans-serif`;
-    ctx.fillStyle = f1Picked ? "#C9A84C" : mainPred ? "#555555" : "#FFFFFF";
-    ctx.textAlign = "left";
-    ctx.fillText(f1Last, PAD, HERO_H - 90);
+  const f1n = mainFight?.fighter1Name ?? "";
+  const f2n = mainFight?.fighter2Name ?? "";
+  const f1Picked = mainPred?.pickedWinner === f1n;
+  const f2Picked = mainPred?.pickedWinner === f2n;
+  const hasPick  = !!mainPred;
 
-    // Fighter 1 first name
-    const f1First = mainFight.fighter1Name.split(" ").slice(0, -1).join(" ").toUpperCase();
-    ctx.font = `600 22px Arial, sans-serif`;
-    ctx.fillStyle = f1Picked ? "#C9A84C" : mainPred ? "#444444" : "#888888";
-    ctx.textAlign = "left";
-    ctx.fillText(f1First, PAD, HERO_H - 58);
+  const f1Col = f1Picked ? GOLD : hasPick ? GREY : WHITE;
+  const f2Col = f2Picked ? GOLD : hasPick ? GREY : WHITE;
 
-    // Fighter 1 pick indicator
-    if (f1Picked) {
-      ctx.font = `bold 20px Arial, sans-serif`;
-      ctx.fillStyle = "#C9A84C";
-      ctx.fillText("✓ MY PICK", PAD, HERO_H - 30);
-    }
+  const nameY = HERO_H - 130;
 
-    // Fighter 2 — last name large, right aligned
-    const f2Last = lastName(mainFight.fighter2Name);
-    const f2Size = fitText(ctx, f2Last, W / 2 - 60, 88, 40);
-    ctx.font = `900 ${f2Size}px 'Arial Black', Arial, sans-serif`;
-    ctx.fillStyle = f2Picked ? "#C9A84C" : mainPred ? "#555555" : "#FFFFFF";
-    ctx.textAlign = "right";
-    ctx.fillText(f2Last, W - PAD, HERO_H - 90);
+  // Last names — large
+  setFont(ctx, 90, true);
+  ctx.fillStyle = f1Col;
+  ctx.textBaseline = "top";
+  ctx.fillText(lastName(f1n), PAD + 8, nameY);
 
-    // Fighter 2 first name
-    const f2First = mainFight.fighter2Name.split(" ").slice(0, -1).join(" ").toUpperCase();
-    ctx.font = `600 22px Arial, sans-serif`;
-    ctx.fillStyle = f2Picked ? "#C9A84C" : mainPred ? "#444444" : "#888888";
-    ctx.textAlign = "right";
-    ctx.fillText(f2First, W - PAD, HERO_H - 58);
+  ctx.fillStyle = f2Col;
+  drawRight(ctx, lastName(f2n), W - PAD - 8, nameY);
 
-    // Fighter 2 pick indicator
-    if (f2Picked) {
-      ctx.font = `bold 20px Arial, sans-serif`;
-      ctx.fillStyle = "#C9A84C";
-      ctx.textAlign = "right";
-      ctx.fillText("MY PICK ✓", W - PAD, HERO_H - 30);
-    }
+  // First names
+  setFont(ctx, 24, true);
+  ctx.fillStyle = f1Picked ? GOLD : MUTED;
+  ctx.fillText(firstName(f1n), PAD + 8, nameY + 98);
+  ctx.fillStyle = f2Picked ? GOLD : MUTED;
+  drawRight(ctx, firstName(f2n), W - PAD - 8, nameY + 98);
 
-    // Main event label
-    const mainLabel = mainFight.isTitleFight ? "TITLE FIGHT" : "MAIN EVENT";
-    ctx.font = `bold 16px Arial, sans-serif`;
-    ctx.fillStyle = "#D20A0A";
-    ctx.textAlign = "center";
-    ctx.fillText(`◆ ${mainLabel} ◆`, W / 2, HERO_H - 30);
+  // Records
+  setFont(ctx, 20, false);
+  ctx.fillStyle = GREY;
+  ctx.fillText(mainFight?.fighter1Record ?? "", PAD + 8, nameY + 128);
+  drawRight(ctx, mainFight?.fighter2Record ?? "", W - PAD - 8, nameY + 128);
 
-    // Weight class
-    if (mainFight.weightClass) {
-      ctx.font = `500 18px Arial, sans-serif`;
-      ctx.fillStyle = "#666666";
-      ctx.textAlign = "center";
-      ctx.fillText(mainFight.weightClass.toUpperCase(), W / 2, HERO_H - 8);
-    }
+  // Pick label + detail
+  const pickY = nameY + 158;
+  if (f1Picked && mainPred) {
+    const detail = methodDetail(mainPred.pickedMethod, mainPred.pickedFinishType);
+    setFont(ctx, 16, true);
+    ctx.fillStyle = GOLD;
+    ctx.fillText("▶ MY PICK", PAD + 8, pickY);
+    setFont(ctx, 18, false);
+    ctx.fillStyle = GOLD_DIM;
+    ctx.fillText(detail, PAD + 8, pickY + 22);
+  } else if (f2Picked && mainPred) {
+    const detail = methodDetail(mainPred.pickedMethod, mainPred.pickedFinishType);
+    setFont(ctx, 16, true);
+    ctx.fillStyle = GOLD;
+    drawRight(ctx, "MY PICK ◀", W - PAD - 8, pickY);
+    setFont(ctx, 18, false);
+    ctx.fillStyle = GOLD_DIM;
+    drawRight(ctx, detail, W - PAD - 8, pickY + 22);
   }
 
-  // ── FIGHT CARD SECTION ───────────────────────────────────────────────────────
-  let rowY = HERO_H + SECTION_HEADER_H;
+  // Main event / weight class
+  setFont(ctx, 16, true);
+  ctx.fillStyle = RED;
+  const meLabel = mainFight?.isTitleFight ? "◆ TITLE FIGHT ◆" : "◆ MAIN EVENT ◆";
+  drawCentered(ctx, meLabel, W / 2, HERO_H - 52);
 
-  // Section header
-  ctx.font = `bold 20px Arial, sans-serif`;
-  ctx.fillStyle = "#666666";
-  ctx.textAlign = "left";
-  ctx.fillText("FULL CARD PICKS", PAD, HERO_H + 34);
+  setFont(ctx, 18, false);
+  ctx.fillStyle = GREY;
+  drawCentered(ctx, (mainFight?.weightClass ?? "").toUpperCase(), W / 2, HERO_H - 28);
 
-  // Thin gold divider
-  ctx.strokeStyle = "#C9A84C";
+  // Red X on loser side
+  if (hasPick) {
+    const xSide = f1Picked ? "right" : "left";
+    ctx.strokeStyle = "rgba(180,0,0,0.35)";
+    ctx.lineWidth = 10;
+    ctx.lineCap = "round";
+    const x0 = xSide === "right" ? W / 2 + 20 : 20;
+    const x1 = xSide === "right" ? W - 20 : W / 2 - 20;
+    ctx.beginPath(); ctx.moveTo(x0, 90); ctx.lineTo(x1, HERO_H - 80); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x1, 90); ctx.lineTo(x0, HERO_H - 80); ctx.stroke();
+  }
+
+  // Hero bottom fade
+  const heroFade = ctx.createLinearGradient(0, HERO_H - 80, 0, HERO_H);
+  heroFade.addColorStop(0, "rgba(8,8,8,0)");
+  heroFade.addColorStop(1, "rgba(8,8,8,1)");
+  ctx.fillStyle = heroFade;
+  ctx.fillRect(0, HERO_H - 80, W, 80);
+
+  // ── Section header ───────────────────────────────────────────────────────────
+  const secY = HERO_H + 12;
+  setFont(ctx, 18, true);
+  ctx.fillStyle = MUTED;
+  ctx.textBaseline = "top";
+  ctx.fillText("FULL CARD PICKS", PAD, secY);
+  ctx.strokeStyle = GOLD;
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(PAD, HERO_H + 40);
-  ctx.lineTo(W - PAD, HERO_H + 40);
-  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(PAD, secY + 26); ctx.lineTo(W - PAD, secY + 26); ctx.stroke();
+
+  // ── Fight rows ───────────────────────────────────────────────────────────────
+  let rowY = HERO_H + SEC_H;
 
   for (const fight of fights) {
-    const pred = fightsWithPreds.find((f) => f.id === fight.id)?.userPrediction;
-    const f1Picked = !!pred && pred.pickedWinner === fight.fighter1Name;
-    const f2Picked = !!pred && pred.pickedWinner === fight.fighter2Name;
-    const isCorrect = pred?.status === "correct";
-    const isWrong = pred?.status === "wrong";
+    const pred = fightsWithPreds.find(f => f.id === fight.id)?.userPrediction;
+    const pF1  = pred?.pickedWinner === fight.fighter1Name;
+    const pF2  = pred?.pickedWinner === fight.fighter2Name;
+    const hp   = !!pred;
 
-    // Row background
-    drawRoundedRect(ctx, PAD, rowY, W - PAD * 2, ROW_H, 12);
-    ctx.fillStyle = fight.isMainEvent ? "#1C1810" : "#111111";
+    // Row bg
+    rrect(ctx, PAD, rowY, W - PAD * 2, ROW_H, 12);
+    ctx.fillStyle = fight.isMainEvent ? MAIN_ROW : DARK_ROW;
     ctx.fill();
-
-    // Main event gold border
     if (fight.isMainEvent) {
-      ctx.strokeStyle = "rgba(201,168,76,0.25)";
-      ctx.lineWidth = 1.5;
-      drawRoundedRect(ctx, PAD, rowY, W - PAD * 2, ROW_H, 12);
-      ctx.stroke();
+      rrect(ctx, PAD, rowY, W - PAD * 2, ROW_H, 12);
+      ctx.strokeStyle = "rgba(80,65,20,0.6)"; ctx.lineWidth = 1; ctx.stroke();
     }
 
-    const innerX = PAD + 18;
-    const innerW = W - PAD * 2 - 36;
-    const rowMid = rowY + ROW_H / 2;
+    const ix  = PAD + 16;
+    const iw  = W - PAD * 2 - 32;
+    const mid = rowY + ROW_H / 2;
 
-    // ── Fighter 1 (left) ──
-    ctx.font = `${f1Picked ? "900" : "600"} 24px 'Arial Black', Arial, sans-serif`;
-    ctx.fillStyle = f1Picked ? "#C9A84C" : (pred && !f1Picked) ? "#444444" : "#BBBBBB";
-    ctx.textAlign = "left";
+    // Fighter 1
+    const f1c = pF1 ? GOLD : hp ? GREY : "#D2D2D2";
+    setFont(ctx, 22, true);
+    ctx.fillStyle = f1c;
     ctx.textBaseline = "middle";
 
-    // Truncate name to fit
-    let f1Display = fight.fighter1Name;
-    while (ctx.measureText(f1Display).width > innerW * 0.38 && f1Display.length > 4) {
-      f1Display = f1Display.slice(0, -1);
-    }
-    if (f1Display !== fight.fighter1Name) f1Display += "…";
-    ctx.fillText(f1Display, innerX, rowMid - 6);
+    let f1d = fight.fighter1Name;
+    while (tw(ctx, f1d) > iw * 0.40 && f1d.length > 4) f1d = f1d.slice(0, -1);
+    if (f1d !== fight.fighter1Name) f1d += "…";
+    ctx.fillText(f1d, ix, mid - 10);
 
-    // Record
-    if (fight.fighter1Record) {
-      ctx.font = `400 14px Arial, sans-serif`;
-      ctx.fillStyle = "#444444";
-      ctx.fillText(fight.fighter1Record, innerX, rowMid + 14);
-    }
+    setFont(ctx, 14, false);
+    ctx.fillStyle = "#373737";
+    ctx.fillText(fight.fighter1Record ?? "", ix, mid + 12);
 
-    // Pick marker
-    if (f1Picked) {
-      ctx.font = `bold 18px Arial, sans-serif`;
-      ctx.fillStyle = "#C9A84C";
-      ctx.fillText("✓", innerX + ctx.measureText(f1Display).width + 8, rowMid - 6);
-    } else if (pred && !f1Picked) {
-      ctx.font = `bold 18px Arial, sans-serif`;
-      ctx.fillStyle = "#D20A0A";
-      ctx.fillText("✗", innerX + ctx.measureText(f1Display).width + 8, rowMid - 6);
-    }
+    // F1 marker
+    setFont(ctx, 22, true);
+    const f1dw = tw(ctx, f1d);
+    if (pF1) { ctx.fillStyle = GOLD; ctx.fillText("✓", ix + f1dw + 6, mid - 10); }
+    else if (hp) { ctx.fillStyle = RED; ctx.fillText("✗", ix + f1dw + 6, mid - 10); }
 
-    // ── VS center ──
-    ctx.font = `bold 14px Arial, sans-serif`;
-    ctx.fillStyle = "#333333";
-    ctx.textAlign = "center";
-    ctx.fillText("VS", W / 2, rowMid);
+    // Fighter 2
+    const f2c = pF2 ? GOLD : hp ? GREY : "#D2D2D2";
+    setFont(ctx, 22, true);
+    ctx.fillStyle = f2c;
 
-    // ── Fighter 2 (right) ──
-    ctx.font = `${f2Picked ? "900" : "600"} 24px 'Arial Black', Arial, sans-serif`;
-    ctx.fillStyle = f2Picked ? "#C9A84C" : (pred && !f2Picked) ? "#444444" : "#BBBBBB";
-    ctx.textAlign = "right";
+    let f2d = fight.fighter2Name;
+    while (tw(ctx, f2d) > iw * 0.40 && f2d.length > 4) f2d = f2d.slice(0, -1);
+    if (f2d !== fight.fighter2Name) f2d += "…";
+    const f2dw = tw(ctx, f2d);
+    ctx.fillText(f2d, ix + iw - f2dw, mid - 10);
 
-    let f2Display = fight.fighter2Name;
-    while (ctx.measureText(f2Display).width > innerW * 0.38 && f2Display.length > 4) {
-      f2Display = f2Display.slice(0, -1);
-    }
-    if (f2Display !== fight.fighter2Name) f2Display += "…";
-    ctx.fillText(f2Display, innerX + innerW, rowMid - 6);
+    setFont(ctx, 14, false);
+    ctx.fillStyle = "#373737";
+    const recW = tw(ctx, fight.fighter2Record ?? "");
+    ctx.fillText(fight.fighter2Record ?? "", ix + iw - recW, mid + 12);
 
-    if (fight.fighter2Record) {
-      ctx.font = `400 14px Arial, sans-serif`;
-      ctx.fillStyle = "#444444";
-      ctx.textAlign = "right";
-      ctx.fillText(fight.fighter2Record, innerX + innerW, rowMid + 14);
-    }
+    // F2 marker
+    setFont(ctx, 22, true);
+    if (pF2) { ctx.fillStyle = GOLD; ctx.fillText("✓", ix + iw - f2dw - tw(ctx, "✓") - 6, mid - 10); }
+    else if (hp) { ctx.fillStyle = RED; ctx.fillText("✗", ix + iw - f2dw - tw(ctx, "✗") - 6, mid - 10); }
 
-    // Pick marker
-    if (f2Picked) {
-      ctx.font = `bold 18px Arial, sans-serif`;
-      ctx.fillStyle = "#C9A84C";
-      ctx.textAlign = "right";
-      ctx.fillText("✓", innerX + innerW - ctx.measureText(f2Display).width - 8, rowMid - 6);
-    } else if (pred && !f2Picked) {
-      ctx.font = `bold 18px Arial, sans-serif`;
-      ctx.fillStyle = "#D20A0A";
-      ctx.textAlign = "right";
-      ctx.fillText("✗", innerX + innerW - ctx.measureText(f2Display).width - 8, rowMid - 6);
-    }
+    // Center: method badge + round badge
+    const cx = W / 2;
+    if (hp && pred) {
+      // Build label: method + finish type
+      const isDecision = pred.pickedFinishType === "decision" || !pred.pickedMethod;
+      const mShort = isDecision ? "DECISION" : methodShort(pred.pickedMethod);
+      const finishLabel = isDecision ? "" : pred.pickedFinishType === "finish" ? "FINISH" : "";
+      const badgeCol = pred.status === "correct" ? "#22C55E"
+                     : pred.status === "wrong"   ? "#EF4444"
+                     : GOLD;
 
-    // ── Method badge ──
-    if (pred?.pickedMethod) {
-      const methodLabel =
-        pred.pickedMethod === "tko_ko" ? "TKO/KO" :
-        pred.pickedMethod === "submission" ? "SUB" : "DEC";
-      const badgeColor = isCorrect ? "#22c55e" : isWrong ? "#ef4444" : "#C9A84C";
-      const badgeBg = isCorrect ? "rgba(34,197,94,0.12)" : isWrong ? "rgba(239,68,68,0.12)" : "rgba(201,168,76,0.12)";
-      ctx.font = `bold 13px Arial, sans-serif`;
-      ctx.textAlign = "center";
-      const bw = Math.max(ctx.measureText(methodLabel).width + 18, 60);
-      const bh = 26;
-      const bx = W / 2 - bw / 2;
-      const by = rowMid + 18;
-      drawRoundedRect(ctx, bx, by, bw, bh, 6);
-      ctx.fillStyle = badgeBg;
-      ctx.fill();
-      ctx.strokeStyle = badgeColor;
-      ctx.lineWidth = 1;
-      drawRoundedRect(ctx, bx, by, bw, bh, 6);
-      ctx.stroke();
-      ctx.fillStyle = badgeColor;
+      // Method badge (top)
+      setFont(ctx, 13, true);
+      const bw = tw(ctx, mShort) + 20;
+      const bh = 24;
+      const bx = cx - bw / 2;
+      const by = mid - 22;
+      rrect(ctx, bx, by, bw, bh, 6);
+      ctx.fillStyle = "#141414"; ctx.fill();
+      rrect(ctx, bx, by, bw, bh, 6);
+      ctx.strokeStyle = badgeCol; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = badgeCol;
       ctx.textBaseline = "middle";
-      ctx.fillText(methodLabel, W / 2, by + bh / 2);
-      ctx.textBaseline = "alphabetic";
-    }
+      drawCentered(ctx, mShort, cx, by + bh / 2);
 
-    // No pick
-    if (!pred) {
-      ctx.font = `400 14px Arial, sans-serif`;
-      ctx.fillStyle = "#2A2A2A";
-      ctx.textAlign = "center";
+      // Finish type badge (bottom, only for non-decision)
+      if (!isDecision) {
+        const ftText = "INSIDE DIST";
+        setFont(ctx, 12, false);
+        const rw = tw(ctx, ftText) + 16;
+        const rh = 20;
+        const rx = cx - rw / 2;
+        const ry = mid + 4;
+        rrect(ctx, rx, ry, rw, rh, 5);
+        ctx.fillStyle = "#141414"; ctx.fill();
+        rrect(ctx, rx, ry, rw, rh, 5);
+        ctx.strokeStyle = "#3C3C3C"; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = "#787878";
+        drawCentered(ctx, ftText, cx, ry + rh / 2);
+      } else {
+        setFont(ctx, 13, false);
+        ctx.fillStyle = "#2D2D2D";
+        ctx.textBaseline = "middle";
+        drawCentered(ctx, "VS", cx, mid);
+      }
+    } else {
+      setFont(ctx, 13, false);
+      ctx.fillStyle = "#2D2D2D";
       ctx.textBaseline = "middle";
-      ctx.fillText("— no pick —", W / 2, rowMid);
-      ctx.textBaseline = "alphabetic";
+      drawCentered(ctx, "VS", cx, mid - 6);
+      setFont(ctx, 12, false);
+      ctx.fillStyle = "#262626";
+      drawCentered(ctx, "— no pick —", cx, mid + 8);
     }
 
+    ctx.textBaseline = "alphabetic";
     rowY += ROW_H + ROW_GAP;
   }
 
-  // ── FOOTER ───────────────────────────────────────────────────────────────────
-  const footerY = rowY + 16;
+  // ── Footer ───────────────────────────────────────────────────────────────────
+  const fy = rowY + 14;
+  ctx.strokeStyle = "#1C1C1C"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PAD, fy); ctx.lineTo(W - PAD, fy); ctx.stroke();
 
-  ctx.strokeStyle = "#1E1E1E";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(PAD, footerY);
-  ctx.lineTo(W - PAD, footerY);
-  ctx.stroke();
+  setFont(ctx, 28, true);
+  ctx.fillStyle = GOLD;
+  ctx.textBaseline = "top";
+  ctx.fillText(`@${username}`, PAD, fy + 18);
 
-  ctx.font = `bold 28px 'Arial Black', Arial, sans-serif`;
-  ctx.fillStyle = "#C9A84C";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText(`@${username}`, PAD, footerY + 36);
+  const pickCount = fightsWithPreds.filter(f => f.userPrediction).length;
+  const pcText = `${pickCount}/${fights.length} picks made`;
+  setFont(ctx, 18, false);
+  ctx.fillStyle = MUTED;
+  drawCentered(ctx, pcText, W / 2, fy + 24);
 
-  const pickCount = fightsWithPreds.filter((f) => f.userPrediction).length;
-  ctx.font = `500 20px Arial, sans-serif`;
-  ctx.fillStyle = "#444444";
-  ctx.textAlign = "center";
-  ctx.fillText(`${pickCount}/${fights.length} picks made`, W / 2, footerY + 36);
+  ctx.fillStyle = "#2D2D2D";
+  drawRight(ctx, "fightcred.app", W - PAD, fy + 24);
 
-  ctx.font = `500 20px Arial, sans-serif`;
-  ctx.fillStyle = "#333333";
-  ctx.textAlign = "right";
-  ctx.fillText("fightcred.app", W - PAD, footerY + 36);
-
-  ctx.textBaseline = "alphabetic";
-
-  // ── Gold bottom bar ───────────────────────────────────────────────────────────
-  ctx.fillStyle = "#C9A84C";
+  // Gold bottom bar
+  ctx.fillStyle = GOLD;
   ctx.fillRect(0, H - 7, W, 7);
 
   return canvas.toDataURL("image/png");
@@ -610,25 +443,20 @@ async function generateShareImage(
 export function SharePicksButton({
   eventName,
   eventDate,
-  eventImageUrl,
   fights,
   fightsWithPreds,
   username,
 }: Props) {
   const [isGenerating, setIsGenerating] = useState(false);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [showPreview, setShowPreview] = useState(false);
+  const [imageUrl, setImageUrl]         = useState<string | null>(null);
+  const [showPreview, setShowPreview]   = useState(false);
 
   const handleGenerate = useCallback(async () => {
     setIsGenerating(true);
     try {
-      const preds: FightWithPred[] = (fightsWithPreds ?? []) as FightWithPred[];
+      const preds = (fightsWithPreds ?? []) as FightWithPred[];
       const url = await generateShareImage(
-        eventName,
-        eventDate,
-        fights,
-        preds,
-        username ?? "FightCred",
+        eventName, eventDate, fights, preds, username ?? "FightCred",
       );
       setImageUrl(url);
       setShowPreview(true);
@@ -644,8 +472,7 @@ export function SharePicksButton({
     if (!imageUrl) return;
     const a = document.createElement("a");
     a.href = imageUrl;
-    const safeName = eventName.replace(/[^a-z0-9]/gi, "_").toLowerCase();
-    a.download = `fightcred_${safeName}_picks.png`;
+    a.download = `fightcred_${eventName.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_picks.png`;
     a.click();
   }, [imageUrl, eventName]);
 
@@ -655,12 +482,9 @@ export function SharePicksButton({
       try {
         const blob = await (await fetch(imageUrl)).blob();
         const file = new File([blob], "fightcred_picks.png", { type: "image/png" });
-        await navigator.share({
-          title: `My FightCred Picks — ${eventName}`,
-          files: [file],
-        });
+        await navigator.share({ title: `My FightCred Picks — ${eventName}`, files: [file] });
         return;
-      } catch { /* fall through to download */ }
+      } catch { /* fall through */ }
     }
     handleDownload();
   }, [imageUrl, eventName, handleDownload]);
@@ -678,19 +502,12 @@ export function SharePicksButton({
         )}
       >
         {isGenerating ? (
-          <>
-            <Loader2 size={16} className="animate-spin" />
-            Generating...
-          </>
+          <><Loader2 size={16} className="animate-spin" />Generating...</>
         ) : (
-          <>
-            <ImageIcon size={16} />
-            Share My Picks
-          </>
+          <><ImageIcon size={16} />Share My Picks</>
         )}
       </button>
 
-      {/* Preview Modal */}
       {showPreview && imageUrl && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4"
@@ -698,9 +515,8 @@ export function SharePicksButton({
         >
           <div
             className="bg-[#1A1A1A] border border-[#333] rounded-2xl overflow-hidden max-w-sm w-full max-h-[90vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
           >
-            {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-[#333] flex-shrink-0">
               <h3 className="font-bold text-white flex items-center gap-2">
                 <Share2 size={16} className="text-[#C9A84C]" />
@@ -709,36 +525,26 @@ export function SharePicksButton({
               <button
                 onClick={() => setShowPreview(false)}
                 className="text-[#9A9A9A] hover:text-white transition-colors text-xl leading-none"
-              >
-                ×
-              </button>
+              >×</button>
             </div>
 
-            {/* Scrollable image preview */}
             <div className="p-3 overflow-y-auto flex-1">
-              <img
-                src={imageUrl}
-                alt="Your picks card"
-                className="w-full rounded-xl border border-[#333]"
-              />
+              <img src={imageUrl} alt="Your picks card" className="w-full rounded-xl border border-[#333]" />
             </div>
 
-            {/* Actions */}
             <div className="flex gap-3 p-3 flex-shrink-0 border-t border-[#222]">
               <button
                 onClick={handleDownload}
                 className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-[#C9A84C] hover:bg-[#b8973f] text-black font-bold text-sm transition-colors"
               >
-                <Download size={16} />
-                Download
+                <Download size={16} />Download
               </button>
               {typeof navigator !== "undefined" && typeof navigator.share === "function" && (
                 <button
                   onClick={handleShare}
                   className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-[#D20A0A] hover:bg-[#b00808] text-white font-bold text-sm transition-colors"
                 >
-                  <Share2 size={16} />
-                  Share
+                  <Share2 size={16} />Share
                 </button>
               )}
             </div>
