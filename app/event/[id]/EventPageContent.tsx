@@ -187,6 +187,7 @@ export default function EventPage({ params }: { params: Promise<{ id: string }> 
   const { data: fightsWithPreds } = trpc.fights.byEventWithPredictions.useQuery({ eventId });
   const { data: leaderboard } = trpc.leaderboard.byEvent.useQuery({ eventId, limit: 5 });
   const { data: user } = trpc.auth.me.useQuery();
+  const { data: profile } = trpc.profile.get.useQuery(undefined, { enabled: !!user });
 
   const isLoading = eventLoading || fightsLoading;
 
@@ -267,7 +268,7 @@ export default function EventPage({ params }: { params: Promise<{ id: string }> 
             eventImageUrl={(event as { imageUrl?: string | null }).imageUrl}
             fights={fights}
             fightsWithPreds={fightsWithPreds}
-            username={(user as { username?: string } | null | undefined)?.username}
+            username={profile?.username}
           />
         </div>
       )}

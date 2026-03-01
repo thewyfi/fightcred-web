@@ -192,10 +192,11 @@ async function generateShareImage(
   ctx.textBaseline = "top";
 
   // ── Main event fighters ───────────────────────────────────────────────────────
-  const mainFight = fights.find(f => f.isMainEvent) ?? fights[0];
-  const mainPred  = mainFight
-    ? fightsWithPreds.find(f => f.id === mainFight.id)?.userPrediction
-    : null;
+  // Use fightsWithPreds as source of truth for hero section too
+  const allFightsForHero = fightsWithPreds.length > 0 ? fightsWithPreds : fights.map(f => ({ ...f, userPrediction: null }));
+  const mainFightWithPred = allFightsForHero.find(f => f.isMainEvent) ?? allFightsForHero[0];
+  const mainFight = mainFightWithPred;
+  const mainPred  = (mainFightWithPred as FightWithPred)?.userPrediction ?? null;
 
   const f1n = mainFight?.fighter1Name ?? "";
   const f2n = mainFight?.fighter2Name ?? "";
@@ -292,8 +293,10 @@ async function generateShareImage(
   // ── Fight rows ───────────────────────────────────────────────────────────────
   let rowY = HERO_H + SEC_H;
 
-  for (const fight of fights) {
-    const pred = fightsWithPreds.find(f => f.id === fight.id)?.userPrediction;
+  // Use fightsWithPreds as single source of truth — it contains all fight data + predictions
+  const allFights = fightsWithPreds.length > 0 ? fightsWithPreds : fights.map(f => ({ ...f, userPrediction: null }));
+  for (const fight of allFights) {
+    const pred = (fight as FightWithPred).userPrediction ?? null;
     const pF1  = pred?.pickedWinner === fight.fighter1Name;
     const pF2  = pred?.pickedWinner === fight.fighter2Name;
     const hp   = !!pred;
